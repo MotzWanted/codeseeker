@@ -1,0 +1,36 @@
+- name: system instructions
+  role: system
+  content: |
+    You will be given a list of documents. You need to read carefully and understand all of them. 
+    Then you will be given a claim that may reference 1 or more documents. 
+    Your goal is to identify if the claim is referenced and select the document IDs that is referenced in the given claim.\n
+
+- name: corpus
+  role: user
+  content: |
+    ====== Documents ======
+    ID: 0 | Content: "The claim is not referenced" | ID END: 0
+    {% for doc in corpus %}
+    ID: {{ loop.index }} | Content: {{ custom_tojson(doc) }} | ID END: {{ loop.index }}
+    {% endfor %}\n
+    
+{% for shot in fewshots %}
+- name: few shots {{ loop.index }}
+  role: user
+  truncation_priority: {{ loop.index }}
+  content: |
+    ====== Example {{ loop.index }} ======
+    Which documents are referenced in the claim? Use ID 0 if the claim is not referenced. Output the selected document IDs as a list in JSON format.
+
+    Claim: "{{ custom_tojson(shot.query | escape) }}"
+    Final Answer: "{{ custom_tojson({"ids": shot.labels}) }}"\n
+{% endfor %}
+   
+- name: new input
+  role: user
+  content: |
+    ====== Now let's start! ======
+    Which documents are referenced in the claim? Use ID 0 if the claim is not referenced. Output the selected document IDs as a list in JSON format.
+
+    Claim: "{{ custom_tojson(query | escape) }}"
+    Final Answer:

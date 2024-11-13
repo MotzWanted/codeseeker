@@ -1,0 +1,25 @@
+- name: single prompt
+  role: user
+  content: |
+    You are a medical expert fact-checking medical documentation.
+    Your goal is to identify and select the documentation indices that entails the hypothesis.
+
+    # Instruction guidelines:
+    1. A hypothesis is entailed only if all aspects of the hypothesis are supported by the documentation.
+    2. For compound hypothesis, ensure that all aspects are supported by the documentation indice(s).
+    3. If the hypothesis is not entailed by the documentation, output a zero list: `[0]`.
+    4. If a compound hypothesis is entailed, list all document indices that supports the hypothesis, e.g., `[1, 3, 7]`.
+    5. Else output the single document index that entails the hypothesis: `[5]`.
+    6. Note that fewer the indices, the better the alignment.
+
+    # Output
+    Please output in json format, e.g., `{"indices": [1, 3, 7]}`. If the hypothesis is not supported, output a zero list: `[0]`.
+
+    # Input
+    Hypothesis: '{{ fact }}'
+
+    # Documentation:
+    [0] Not supported.
+    {% for option in input_list %}
+    [{{ loop.index }}]  '{{ option }}'.
+    {% endfor %}

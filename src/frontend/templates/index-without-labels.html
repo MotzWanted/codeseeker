@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
+    <meta charset="UTF-8">
+    <title>Alignment Demo</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            overflow-x: hidden;
+            position: relative;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: auto;
+            max-width: 100%;
+        }
+        .full-width {
+            grid-column: span 2;
+            text-align: center;
+        }
+        .transcript, .summary {
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            max-height: 80vh;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+            position: relative;
+        }
+        .transcript h1, .summary h1 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+        }
+        .highlight {
+            background-color: yellow !important;
+        }
+        .transcript p, .summary p {
+            line-height: 1.2;
+            margin-bottom: 10px;
+        }
+        .transcript span {
+            display: flex;
+            align-items: center;
+            padding: 3px 5px; /* Reduced padding */
+            margin-bottom: 3px; /* Reduced margin */
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #e9ecef;
+            white-space: normal;
+            font-size: 0.9rem; /* Reduced font size */
+        }
+        .transcript span .index {
+            margin-right: 8px; /* Slightly reduced margin */
+            font-weight: bold;
+            color: #333;
+            min-width: 25px; /* Reduced width */
+            text-align: right;
+        }
+        .summary-sentence {
+            margin-bottom: 5px; /* Reduced margin */
+            position: relative;
+        }
+        .match-indicator {
+            margin-left: 8px;
+            font-weight: bold;
+            color: #28A745;
+        }
+        .no-match .match-indicator {
+            color: #DC3545;
+        }
+        .btn-update {
+            background-color: #dc3545;
+            border-color: #dc3545;
+            color: white;
+        }
+        .metric {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        .loading-spinner {
+            display: none;
+            width: 3rem;
+            height: 3rem;
+            border: 0.4rem solid #f3f3f3;
+            border-top: 0.4rem solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .hidden-list {
+            display: none;
+            margin-top: 10px;
+            background-color: #f1f1f1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            position: relative;
+            align-items: center;
+        }
+        .edit-icon {
+            cursor: pointer;
+            margin-left: 8px;
+            color: #007bff;
+        }
+        .editable-inputs {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .editable-input {
+            display: flex;
+            align-items: center;
+            margin-right: 10px;
+            margin-bottom: 5px;
+            position: relative;
+        }
+        .editable-input input {
+            width: 40px;
+            margin-right: 5px;
+        }
+        .add-input {
+            cursor: pointer;
+            color: #28a745;
+            font-size: 1rem;
+            position: absolute;
+            right: 0;
+            top: 0;
+        }
+        .remove-input {
+            cursor: pointer;
+            color: #dc3545;
+            font-size: 0.8rem;
+            position: absolute;
+            top: 0;
+            right: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <form method="GET" action="/" class="mb-3 full-width" id="alignmentForm">
+            <div class="row align-items-end">
+                <div class="col-md-auto">
+                    <label for="entryIndexSelect" class="form-label">Select Entry:</label>
+                    <select class="form-select" name="entry_index" id="entryIndexSelect">
+                        {% for i in range(num_entries) %}
+                        <option value="{{ i }}" {% if i == selected_entry %}selected{% endif %}>
+                            Entry {{ i }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-auto">
+                    <label for="modelSelect" class="form-label">Model:</label>
+                    <select class="form-select" name="model" id="modelSelect">
+                        <option value="gpt_4_turbo" {% if model == 'gpt_4_turbo' %}selected{% endif %}>GPT-4-Turbo</option>
+                        <option value="mistral_large" {% if model == 'mistral_large' %}selected{% endif %}>Mistral-Large</option>
+                        <option value="local_llm" {% if model == 'local_llm' %}selected{% endif %}>Local LLM</option>
+                    </select>
+                </div>
+                <div class="col-md-auto">
+                    <button type="submit" class="btn btn-update">Update</button>
+                </div>
+                <div class="col-md-auto">
+                    <a href="/align" class="btn btn-primary">Create your own input!</a>
+                </div>
+            </div>
+        </form>
+    </div>
+    <div class="container" id="contentContainer">
+        <div class="transcript">
+            <div>
+                {% if sources is mapping %}
+                    {% set ns = namespace(count=0) %}
+                    {% for category, lines in sources.items() %}
+                        <strong>{{ category | capitalize }}</strong>
+                        {% for i in range(lines|length) %}
+                            <span id="source-{{ i + 1 }}" class="sources">
+                                <span class="index">{{ i + 1 }}</span> {{ lines[i] }}
+                            </span>
+                        {% endfor %}
+                    {% endfor %}
+                {% elif sources is iterable %}
+                    {% for i in range(sources|length) %}
+                        <span id="source-{{ i + 1 }}" class="sources">
+                            <span class="index">{{ i + 1}}</span> {{ sources[i] }}
+                        </span>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+        <div class="summary">
+            <div>
+                {% if targets is mapping %}
+                    {% set ns = namespace(count=0) %}
+                    {% for category, lines in targets.items() %}
+                        <strong>{{ category | capitalize }}</strong>
+                        {% for line in lines %}
+                            <p class="targets {% if match_counts[ns.count] == 0 %}no-match{% endif %}"
+                               data-summary-index="{{ ns.count }}"
+                               onmouseenter="highlightCorrespondingTranscript({{ ns.count }})"
+                               onmouseleave="clearHighlights()"
+                               onclick="scrollToTranscript({{ ns.count }})">
+                                {{ line }}
+                                <span class="match-indicator" id="match-indicator-{{ ns.count }}">{{ '✓' if match_counts[ns.count] > 0 else '✕' }} <span id="match-count-{{ ns.count }}">{{ match_counts[ns.count] }}</span></span>
+                                <span class="edit-icon" onclick="toggleHiddenList(event, {{ ns.count }})">&#9998;</span>
+                                <div class="hidden-list" id="hidden-list-{{ ns.count }}">
+                                    <div class="editable-inputs">
+                                        {% for index in alignment_indices[ns.count] %}
+                                            <div class="editable-input">
+                                                <input type="text" name="alignment_indices[{{ ns.count }}][]" value="{{ index }}" class="form-control" oninput="updateHighlight({{ ns.count }})">
+                                                <span class="remove-input" onclick="removeInput(this)">&#10060;</span>
+                                            </div>
+                                        {% endfor %}
+                                    </div>
+                                    <span class="add-input" onclick="addInput('hidden-list-{{ ns.count }}')">&#10010;</span>
+                                </div>
+                            </p>
+                            {% set ns.count = ns.count + 1 %}
+                        {% endfor %}
+                    {% endfor %}
+                {% elif targets is iterable %}
+                    {% set ns = namespace(count=0) %}
+                    {% for line in targets %}
+                        <p class="targets {% if match_counts[ns.count] == 0 %}no-match{% endif %}"
+                            data-summary-index="{{ ns.count }}"
+                            onmouseenter="highlightCorrespondingTranscript({{ ns.count }})"
+                            onmouseleave="clearHighlights()"
+                            onclick="scrollToTranscript({{ ns.count }})">
+                            {{ line }}
+                            <span class="match-indicator" id="match-indicator-{{ ns.count }}">{{ '✓' if match_counts[ns.count] > 0 else '✕' }} <span id="match-count-{{ ns.count }}">{{ match_counts[ns.count] }}</span></span>
+                            <span class="edit-icon" onclick="toggleHiddenList(event, {{ ns.count }})">&#9998;</span>
+                            <div class="hidden-list" id="hidden-list-{{ ns.count }}">
+                                <div class="editable-inputs">
+                                    {% for index in alignment_indices[ns.count] %}
+                                        <div class="editable-input">
+                                            <input type="text" name="alignment_indices[{{ ns.count }}][]" value="{{ index }}" class="form-control" oninput="updateHighlight({{ ns.count }})">
+                                            <span class="remove-input" onclick="removeInput(this)">&#10060;</span>
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                                <span class="add-input" onclick="addInput('hidden-list-{{ ns.count }}')">&#10010;</span>
+                            </div>
+                        </p>
+                        {% set ns.count = ns.count + 1 %}
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="loading-spinner" id="loadingSpinner"></div>
+    <script>
+        var alignment_matrix = {{ alignment_matrix | tojson }};
+        var summarySentences = document.querySelectorAll('.targets');
+        var transcriptSentences = document.querySelectorAll('.sources');
+
+        summarySentences.forEach((sentence, index) => {
+            sentence.addEventListener('mouseenter', function() {
+                highlightCorrespondingTranscript(index);
+            });
+            sentence.addEventListener('mouseleave', function() {
+                clearHighlights();
+            });
+        });
+
+        function highlightCorrespondingTranscript(summaryIndex) {
+            clearHighlights();
+            var hiddenList = document.getElementById('hidden-list-' + summaryIndex);
+            var inputs = hiddenList.querySelectorAll('input');
+            inputs.forEach((input) => {
+                var transcriptIndex = parseInt(input.value);
+                if (!isNaN(transcriptIndex) && transcriptIndex > 0 && transcriptSentences[transcriptIndex - 1]) {
+                    transcriptSentences[transcriptIndex - 1].classList.add('highlight');
+                }
+            });
+        }
+
+        function clearHighlights() {
+            transcriptSentences.forEach((sentence) => {
+                sentence.classList.remove('highlight');
+            });
+        }
+
+        function scrollToTranscript(summaryIndex) {
+            var hiddenList = document.getElementById('hidden-list-' + summaryIndex);
+            var inputs = hiddenList.querySelectorAll('input');
+            for (let input of inputs) {
+                var transcriptIndex = parseInt(input.value);
+                if (!isNaN(transcriptIndex) && transcriptIndex > 0 && transcriptSentences[transcriptIndex - 1]) {
+                    var element = document.getElementById('source-' + transcriptIndex);
+                    if (element) {
+                        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        break;
+                    }
+                }
+            }
+        }
+
+        function toggleHiddenList(event, summaryIndex) {
+            event.stopPropagation();
+            var hiddenList = document.getElementById('hidden-list-' + summaryIndex);
+            if (hiddenList) {
+                if (hiddenList.style.display === 'none' || hiddenList.style.display === '') {
+                    hiddenList.style.display = 'block';
+                } else {
+                    hiddenList.style.display = 'none';
+                }
+            }
+        }
+
+        function addInput(hiddenListId) {
+            var hiddenList = document.getElementById(hiddenListId).querySelector('.editable-inputs');
+            var newInputDiv = document.createElement('div');
+            newInputDiv.classList.add('editable-input');
+            newInputDiv.innerHTML = '<input type="text" name="alignment_indices[' + hiddenListId.split('-').pop() + '][]" class="form-control" oninput="updateHighlight(' + hiddenListId.split('-').pop() + ')"><span class="remove-input" onclick="removeInput(this)">&#10060;</span>';
+            hiddenList.appendChild(newInputDiv);
+            updateHighlight(hiddenListId.split('-').pop());
+        }
+
+        function removeInput(element) {
+            var summaryIndex = element.closest('.hidden-list').id.split('-').pop();
+            element.parentElement.remove();
+            updateHighlight(summaryIndex);
+        }
+
+        function updateHighlight(summaryIndex) {
+            clearHighlights();
+            highlightCorrespondingTranscript(summaryIndex);
+            updateMatchIndicator(summaryIndex);
+        }
+
+        function updateMatchIndicator(summaryIndex) {
+            var hiddenList = document.getElementById('hidden-list-' + summaryIndex);
+            var inputs = hiddenList.querySelectorAll('input');
+            var count = 0;
+            inputs.forEach((input) => {
+                var transcriptIndex = parseInt(input.value);
+                if (!isNaN(transcriptIndex) && transcriptIndex > 0 && transcriptSentences[transcriptIndex - 1]) {
+                    count++;
+                }
+            });
+            var matchIndicator = document.getElementById('match-indicator-' + summaryIndex);
+            var matchCount = document.getElementById('match-count-' + summaryIndex);
+            matchCount.textContent = count;
+            if (count > 0) {
+                matchIndicator.innerHTML = '✓ <span id="match-count-' + summaryIndex + '">' + count + '</span>';
+                matchIndicator.style.color = '#28A745'; // green
+            } else {
+                matchIndicator.innerHTML = '✕ <span id="match-count-' + summaryIndex + '">0</span>';
+                matchIndicator.style.color = '#DC3545'; // red
+            }
+        }
+        function collectHiddenListInputs() {
+            var hiddenLists = document.querySelectorAll('.hidden-list');
+            var allIndices = {};
+
+            hiddenLists.forEach(function(hiddenList) {
+                var summaryIndex = hiddenList.id.split('-').pop();
+                var inputs = hiddenList.querySelectorAll('input');
+                allIndices[summaryIndex] = [];
+
+                inputs.forEach(function(input) {
+                    allIndices[summaryIndex].push(input.value);
+                });
+            });
+
+            document.getElementById('editedAlignmentIndices').value = JSON.stringify(allIndices);
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous" defer></script>
+</body>
+</html>

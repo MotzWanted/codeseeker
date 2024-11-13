@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
+    <meta charset="UTF-8">
+    <title>Alignment</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            overflow-x: hidden;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            max-width: 100%;
+        }
+        .input-column, .target-column {
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            max-height: 80vh;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .full-width {
+            grid-column: 1 / -1;
+            width: 100%;
+        }
+        .input-column {
+            height: 100%;
+            width: 100%;
+        }
+        .input-column p, .target-column p {
+            line-height: 1.2;
+            margin-bottom: 10px;
+        }
+        .input-column span, .target-column span {
+            display: inline;
+            white-space: normal;
+        }
+        .summary-sentence {
+            margin-bottom: 10px;
+            position: relative;
+        }
+        .input-box {
+            display: inline-block;
+            padding: 5px 10px;
+            margin: 2px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #e9ecef;
+        }
+        .input-box .remove-box {
+            margin-left: 10px;
+            color: #dc3545;
+            cursor: pointer;
+        }
+        .input-field {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .input-field textarea {
+            flex: 1;
+            border: none;
+            outline: none;
+            resize: none;
+            background: transparent;
+        }
+        .remove-summary-box {
+            cursor: pointer;
+            color: #dc3545;
+            font-size: 1.2em;
+            float: right;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <form method="POST" action="/align" class="full-width">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label for="inputTypeSelect" class="form-label">Select Input Type:</label>
+                    <select class="form-select" id="inputTypeSelect" name="input_type" onchange="toggleInputFields()">
+                        <option value="transcript">Transcript</option>
+                        <option value="summary">Summary</option>
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label for="targetTypeSelect" class="form-label">Select Target Type:</label>
+                    <select class="form-select" id="targetTypeSelect" name="target_type" onchange="toggleTargetFields()">
+                        <option value="summary">Summary</option>
+                        <option value="transcript">Transcript</option>
+                    </select>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6">
+                    <div id="transcriptInput" class="input-column">
+                        <h2>Transcript Input</h2>
+                        <textarea class="form-control" rows="10" name="sources_transcript" placeholder="Enter transcript here..."></textarea>
+                    </div>
+                    <div id="summaryInput" class="input-column d-none">
+                        <h2>Summary Input</h2>
+                        <div id="summaryInputContainer">
+                            <!-- Summary input categories will be appended here -->
+                        </div>
+                        <button type="button" class="btn btn-secondary mt-2" onclick="addSummaryBox('summaryInputContainer', 'sources')">Add Summary Category</button>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div id="transcriptTarget" class="target-column d-none">
+                        <h2>Transcript Target</h2>
+                        <textarea class="form-control" rows="10" name="targets_transcript" placeholder="Enter transcript here..."></textarea>
+                    </div>
+                    <div id="summaryTarget" class="target-column">
+                        <h2>Summary Target</h2>
+                        <div id="summaryTargetContainer">
+                            <!-- Summary target categories will be appended here -->
+                        </div>
+                        <button type="button" class="btn btn-secondary mt-2" onclick="addSummaryBox('summaryTargetContainer', 'targets')">Add Summary Category</button>
+                    </div>
+                </div>
+            </div>
+            <div class="row mt-3">
+                <div class="col text-center">
+                    <input type="submit" value="Submit" class="btn btn-primary" />
+                    <a href="/" class="btn btn-secondary">Go Back</a>
+                </div>
+            </div>
+        </form>
+    </div>
+    <script>
+        function toggleInputFields() {
+            var inputType = document.getElementById('inputTypeSelect').value;
+            var transcriptInput = document.getElementById('transcriptInput');
+            var summaryInput = document.getElementById('summaryInput');
+
+            if (inputType === 'transcript') {
+                transcriptInput.classList.remove('d-none');
+                summaryInput.classList.add('d-none');
+            } else {
+                transcriptInput.classList.add('d-none');
+                summaryInput.classList.remove('d-none');
+            }
+        }
+
+        function toggleTargetFields() {
+            var targetType = document.getElementById('targetTypeSelect').value;
+            var transcriptTarget = document.getElementById('transcriptTarget');
+            var summaryTarget = document.getElementById('summaryTarget');
+
+            if (targetType === 'transcript') {
+                transcriptTarget.classList.remove('d-none');
+                summaryTarget.classList.add('d-none');
+            } else {
+                transcriptTarget.classList.add('d-none');
+                summaryTarget.classList.remove('d-none');
+            }
+        }
+
+        function addBox(event, containerId) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                var container = document.getElementById(containerId);
+                var textarea = event.target;
+                var value = textarea.value.trim();
+                if (value) {
+                    var box = document.createElement('div');
+                    box.className = 'input-box';
+                    var input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = containerId + '[]';
+                    input.value = value;
+                    box.innerHTML = value + ' <span class="remove-box" onclick="removeBox(this)">&times;</span>';
+                    box.appendChild(input);
+                    container.insertBefore(box, textarea);
+                    textarea.value = '';
+                }
+            }
+        }
+
+        function removeBox(element) {
+            var box = element.parentElement;
+            box.parentElement.removeChild(box);
+        }
+
+        function addSummaryBox(containerId, type) {
+            var container = document.getElementById(containerId);
+            var boxCount = container.children.length + 1;
+            var box = document.createElement('div');
+            box.className = 'mb-3';
+
+            var headerInput = document.createElement('input');
+            headerInput.type = 'text';
+            headerInput.className = 'form-control mb-2';
+            headerInput.placeholder = 'Enter category title here...';
+            headerInput.name = type + '_headers[]';
+
+            var removeButton = document.createElement('span');
+            removeButton.className = 'remove-summary-box';
+            removeButton.innerHTML = '&times;';
+            removeButton.setAttribute('onclick', 'removeSummaryBox(this)');
+
+            var inputField = document.createElement('div');
+            inputField.className = 'input-field';
+            inputField.id = type + '_box_' + boxCount;
+
+            var textarea = document.createElement('textarea');
+            textarea.className = 'form-control';
+            textarea.rows = '1';
+            textarea.placeholder = 'Enter list here... (Press Enter to add new item)';
+            textarea.setAttribute('onkeydown', 'addBox(event, \'' + type + '_box_' + boxCount + '\')');
+
+            inputField.appendChild(textarea);
+
+            box.appendChild(removeButton);
+            box.appendChild(headerInput);
+            box.appendChild(inputField);
+            container.appendChild(box);
+        }
+
+        function removeSummaryBox(element) {
+            var box = element.parentElement;
+            box.parentElement.removeChild(box);
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
+</body>
+</html>

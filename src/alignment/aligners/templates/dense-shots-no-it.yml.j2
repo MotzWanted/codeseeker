@@ -1,0 +1,39 @@
+- name: system instructions
+  role: system
+  content: |
+    You will be given a list of documents. You need to read carefully and understand all of them. 
+    Then you will be given a claim that may be supported by 1 or more documents. 
+    Your goal is to identify if the claim is supported and select the documentation IDs that provide evidence for the given claim.
+
+
+{% for shot in fewshots %}
+- name: few shots {{ loop.index }}
+  role: user
+  truncation_priority: {{ loop.index }}
+  content: |
+    ====== Example {{ loop.index }} ======
+    # Documentation:
+    ID: 0 | Content: "The claim is not referenced" | ID END: 0
+    {% for doc in shot.corpus %}
+    ID: {{ loop.index }} | Content: {{ custom_tojson(doc) }} | ID END: {{ loop.index }}
+    {% endfor %}
+
+    Claim: "{{ shot.query | escape }}"
+    Final Answer: "{{ custom_tojson({"ids": shot.labels}) }}"
+
+{% endfor %}
+   
+- name: new input
+  role: user
+  content: |
+    ====== Now let's start! ======
+    Find the minimum set of documents that supports the claim. Use ID 0 if the claim is not supported. Print out a list with the ID of each document in JSON format.
+
+    # Documentation:
+    ID: 0 | Content: "The claim is not referenced" | ID END: 0
+    {% for doc in corpus %}
+    ID: {{ loop.index }} | Content: {{ custom_tojson(doc) }} | ID END: {{ loop.index }}
+    {% endfor %}
+
+    Claim: "{{ query | escape }}"
+    Final Answer:
