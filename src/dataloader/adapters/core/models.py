@@ -20,10 +20,3 @@ class FactGenerationModel(pydantic.BaseModel):
         if isinstance(value, int):
             return str(value)
         return value
-
-
-class StreamingFactGenerationModel(FactGenerationModel):
-    """Corpus model."""
-
-    transcript: list[str] = pydantic.Field(..., description="The input text.")
-    facts: list[list[str]] = pydantic.Field(..., description="The summary segments of the text.")

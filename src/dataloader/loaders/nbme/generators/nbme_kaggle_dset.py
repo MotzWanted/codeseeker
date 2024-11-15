@@ -73,7 +73,8 @@ of 2,840 PNs were annotated by 10 physician experts such that all 143 concepts f
  sharing agreement with NBME and can be requested at https://www.nbme.org/services/data-sharing.
 """
 
-_URL = Path("~/Downloads/nbme-score-clinical-patient-notes/").expanduser()
+# _URL = Path("~/Desktop/nbme-score-clinical-patient-notes/").expanduser()
+_URL = Path("/nfs/nas/mlrd/datasets/nbme-patient-notes/")
 
 
 class NbmePatientNotesConfig(datasets.BuilderConfig):
@@ -177,9 +178,7 @@ class NbmePatientNotes(datasets.GeneratorBasedBuilder):
         features_dict = features.set_index("feature_num")["feature_text"].to_dict()
 
         # Add the features dictionary to each row in merged_data
-        merged_data["features"] = merged_data["case_num"].apply(
-            lambda x: {fn: features_dict[fn] for fn in features[features["case_num"] == x]["feature_num"].values}
-        )
+        merged_data["features"] = merged_data.apply(lambda x: features_dict, axis=1)
 
         # Select and rename columns to match the desired output format
         final_data = merged_data[["pn_num", "case_num", "pn_history", "features", "labels"]]
@@ -208,7 +207,7 @@ class NbmePatientNotes(datasets.GeneratorBasedBuilder):
 
         return train_data, filtered_test_data
 
-    def _split_generators(self, dl_manager: datasets.DownloadManager) -> typ.List[datasets.SplitGenerator]:
+    def _split_generators(self, dl_manager: datasets.DownloadManager) -> typ.List[datasets.SplitGenerator]:  # type: ignore
         """Return SplitGenerators."""
         logger.info("Generating splits from `{}`.", _URL)
         full_data = self._load_and_merge_data()
@@ -219,7 +218,7 @@ class NbmePatientNotes(datasets.GeneratorBasedBuilder):
             datasets.SplitGenerator(name=str(datasets.Split.TEST), gen_kwargs={"df": test}),
         ]
 
-    def _generate_examples(
+    def _generate_examples(  # type: ignore
         self,
         df: pd.DataFrame,
     ) -> typ.Generator[typ.Tuple[typ.Hashable, typ.Dict[str, typ.Any]], None, None]:
