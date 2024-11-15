@@ -23,28 +23,19 @@ class AlignmentFewShotModel(pydantic.BaseModel):
     """Alignment few-shot model."""
 
     aid: str
-    corpus: list[str]
-    query: str
+    entities: list[str]
+    segment: str
     labels: list[int]
-
-
-class BinaryFewShotModel(pydantic.BaseModel):
-    """Binary few-shot model."""
-
-    aid: str
-    query: str
-    passage: str
-    label: bool
 
 
 class AlignmentModel(pydantic.BaseModel):
     """Alignment model."""
 
     aid: str
-    corpus: list[str]
-    queries: list[str]
+    entities: list[str]
+    segments: list[str]
     labels: list[list[int]] | None = None
-    fewshots: None | list["AlignmentFewShotModel"] | list["BinaryFewShotModel"] = None
+    fewshots: None | list["AlignmentFewShotModel"] = None
 
     @pydantic.field_validator("labels", mode="before")
     def validate_label_indices(cls, v: list[list[int]]) -> list[list[int]]:
@@ -58,8 +49,10 @@ class AlignmentModel(pydantic.BaseModel):
     @pydantic.model_validator(mode="after")
     def validate_labels(self):
         """Validate the labels."""
-        if self.labels and len(self.labels) != len(self.corpus) and len(self.labels) != len(self.queries):
-            raise ValueError("The number of labels must match the number of sources or targets.")
+        if self.labels:
+            max_value = max(max(inner_list) for inner_list in self.labels)
+            if max_value > len(self.entities):
+                raise ValueError("The maximum value in the labels must be less than the number of entities.")
         return self
 
 
@@ -67,8 +60,8 @@ class SyntheticAlignmentModel(pydantic.BaseModel):
     """Alignment model."""
 
     aid: str
-    corpus: list[str]
-    queries: list[str]
+    entities: list[str]
+    segments: list[str]
     predictions: list[list[int]]
     sparse_matrix: list[list[float]]
     probabilities: list[list[float]]
@@ -78,12 +71,12 @@ class AlignmentModelForTraining(pydantic.BaseModel):
     """Alignment model."""
 
     aid: str
-    corpus: list[str]
-    query: str
+    entities: list[str]
+    segment: str
     targets: list[int]
     probabilities: list[float] | None = None
 
-    @pydantic.field_validator("query", mode="before")
+    @pydantic.field_validator("segment", mode="before")
     def parse_query(cls, v: str) -> str:
         return v.replace("-", " ").strip()
 
@@ -172,14 +165,10 @@ class NbmeAdapter(AlignmentAdapter):
     def __init__(
         self,
         segmenter: Segmenter,
-        query_key: typ.Literal["patient_note", "features"],
         seed: int = 42,
-        binary_fewshots: bool = False,
     ) -> None:
         self.segmenter = segmenter
-        self.query_key = query_key  # determines the direction of the alignment
         self.seed = seed
-        self.binary_fewshots = binary_fewshots
 
     def is_compatible(self, row: dict[str, typ.Any]) -> bool:
         """Check if a row is compatible with this adapter."""
@@ -199,10 +188,10 @@ class NbmeAdapter(AlignmentAdapter):
         start, end = location.split(" ")
         return int(start), int(end)
 
-    def _map_features_to_note_segments(self, sources: list[Segment], label: NmbeAnnotationModel) -> list[list[int]]:
+    def _map_features_to_note_segments(self, chunks: list[Segment], label: NmbeAnnotationModel) -> list[list[int]]:
         """Get the label indices."""
         tree = IntervalTree()
-        for idx, chunk in enumerate(sources, start=1):
+        for idx, chunk in enumerate(chunks, start=1):
             tree.add(Interval(chunk.start, chunk.end, idx))
 
         alignment_indices = []
@@ -220,7 +209,7 @@ class NbmeAdapter(AlignmentAdapter):
                     annotation_indices.add(interval.data)
 
                 if not annotation_indices:
-                    chunk_spans = [(chunk.start, chunk.end) for chunk in sources]
+                    chunk_spans = [(chunk.start, chunk.end) for chunk in chunks]
                     raise ValueError(
                         f"Annotation `{ann}` with location `{ann_loc}` not found in the note:", f"`{chunk_spans}`"
                     )
@@ -234,143 +223,83 @@ class NbmeAdapter(AlignmentAdapter):
 
         return alignment_indices
 
-    def _map_note_segments_to_features(
-        self, sources: list[Segment], targets: list[str], source_labels: list[list[int]]
-    ) -> tuple[list[str], list[list[int]]]:
+    def _map_sources_to_entities(self, sources: list[Segment], label: NmbeAnnotationModel) -> list[list[int]]:
         """Get the target label indices."""
-        if len(targets) != len(source_labels):
-            raise ValueError("The number of targets must match the number of source labels.")
+        tree = IntervalTree()
+        for feat_num, locations in zip(label.feature_num, label.location):
+            for loc in locations:
+                start, end = self._get_span_start_end(loc)
+                tree.add(Interval(start, end, feat_num))
 
-        # Flatten the source_labels and count the number of zeros
-        number_of_non_zeros_source = len([el for sublist in source_labels for el in sublist if el != 0])
+        target_features = []
+        for segment in sources:
+            entity_ids = set()
+            for match in tree[segment.start : segment.end]:
+                entity_ids.add(match.data)
 
-        # Create a zero list with the same length as the number of sources
-        target_indices = [[0] for _ in range(len(sources))]
+            if entity_ids:
+                target_features.append(list(entity_ids))
+            else:
+                target_features.append([])
 
-        # Run over the source labels and populate the list with the target indices
-        for target_idx, source_label in enumerate(source_labels, start=1):
-            # Skip if the source_label is zero as the target is not present in the source
-            if 0 in source_label:
-                continue
-            for source_idx in source_label:
-                if 0 in target_indices[source_idx - 1]:
-                    target_indices[source_idx - 1].pop(0)
-                target_indices[source_idx - 1].append(target_idx)
-
-        shuffled_targets, target_indices = self._shuffle_features(targets, target_indices)
-
-        # Flatten target_indices and count the number of non-zeros
-        number_of_non_zeros_target = len([el for sublist in target_indices for el in sublist if el != 0])
-
-        if number_of_non_zeros_source != number_of_non_zeros_target:
-            raise ValueError(
-                "The number of non-zero elements in the target_indices must be the same as in the source_labels.",
-            )
-
-        return shuffled_targets, target_indices
+        return target_features
 
     def _flatten_fewshots(self, fewshots: list[dict]) -> list[dict[str, str | list[int]]]:
         """Sample n targets and labels from fewshots data without replacement."""
         flatten_fewshots = []
         for shot in fewshots:
-            if len(shot["queries"]) != len(shot["labels"]):
-                raise ValueError("The number of labels and targets should be the same.")
-
-            for idx in range(len(shot["queries"])):
+            for idx in range(len(shot["segments"])):
                 flatten_fewshots.append(
                     {
                         "aid": f"{shot["aid"]}-{idx}",
-                        "corpus": shot["corpus"],
-                        "query": shot["queries"][idx],
+                        "entities": shot["entities"],
+                        "segment": shot["segments"][idx],
                         "labels": shot["labels"][idx],
                     }
                 )
-        if self.binary_fewshots:
-            flatten_fewshots = self._expand_binary_fewshots(flatten_fewshots)
         return flatten_fewshots[:1000]  # putting a cap on the number of shots
 
-    def _expand_binary_fewshots(self, fewshots: list[dict[str, typ.Any]]) -> list[dict[str, typ.Any]]:
-        """Expand binary fewshots data."""
-        false_fewshots = []
-        true_fewshots = []
-        for shot in fewshots:
-            corpus = shot["corpus"]  # list of strings
-            labels = shot["labels"]  # list of integers (indices in corpus)
-            aid = shot["aid"]
-            for idx, passage in enumerate(corpus, start=1):
-                _fewshot = {
-                    "aid": f"{aid}-{idx}",
-                    "query": shot["query"],
-                    "passage": passage,
-                }
-                if idx in labels:
-                    _fewshot["label"] = True
-                    true_fewshots.append(_fewshot)
-                else:
-                    _fewshot["label"] = False
-                    false_fewshots.append(_fewshot)
-        # Balance the classes by undersampling the majority class
-        true_count = len(true_fewshots)
-        balanced_false = (
-            random.sample(false_fewshots, true_count) if len(false_fewshots) > true_count else false_fewshots
-        )
-
-        return true_fewshots + balanced_false
-
-    def _set_corpus_and_queries(self, note_sentences: list[str], features: list[str]) -> tuple[list[str], list[str]]:
-        return (features, note_sentences) if self.query_key == "patient_note" else (note_sentences, features)
-
-    def _shuffle_features(self, features: list[str], indexes: list[list[int]]) -> tuple[list[str], list[list[int]]]:
-        # Shuffle features and generate mapping
-        shuffled_features = features[:]
+    def _shuffle_features(
+        self, features: dict[int, str], targets: list[list[int]]
+    ) -> tuple[list[str], list[list[int]]]:
+        # Extract feature keys and values
+        shuffled_keys = list(features.keys())
         random.seed(self.seed)
-        random.shuffle(shuffled_features)
+        random.shuffle(shuffled_keys)
 
-        # Create mapping from old indices to new ones
-        index_mapping = {i: shuffled_features.index(f) + 1 for i, f in enumerate(features, start=1)}
+        shuffled_values = [features[key] for key in shuffled_keys]
 
-        # Update indexes list according to the shuffled mapping
-        updated_indexes = []
-        for sublist in indexes:
-            updated_sublist = [index_mapping.get(i, 0) if i != 0 else 0 for i in sublist]
-            updated_indexes.append(updated_sublist)
+        # Create a mapping from feature id to new shuffled list index
+        id_to_shuffled_index = {key: index for index, key in enumerate(shuffled_keys, start=1)}
 
-        for i in range(len(updated_indexes)):
-            for old_index, new_index in zip(indexes[i], updated_indexes[i]):
-                if old_index == new_index == 0:
-                    continue
-                if features[old_index - 1] != shuffled_features[new_index - 1]:
-                    raise ValueError(
-                        f"Feature mismatch: {features[old_index - 1]} != {shuffled_features[new_index - 1]}."
-                    )
+        # Update nested list with new indices based on shuffled keys
+        shuffled_targets = []
+        for inner_list in targets:
+            if inner_list:
+                shuffled_targets.append([id_to_shuffled_index[key] for key in inner_list])
+            else:
+                shuffled_targets.append([0])
 
-        return shuffled_features, updated_indexes
+        return shuffled_values, shuffled_targets
 
     def _create_labels(
-        self, labels: NmbeAnnotationModel | None, note_segments: list[Segment], features: list[str]
+        self, labels: NmbeAnnotationModel | None, note_segments: list[Segment], features: dict[int, str]
     ) -> tuple[list[list[int]], list[str]]:
         if not labels:
             return []
-
-        feat2note_links = self._map_features_to_note_segments(note_segments, labels)
-        shuffled_features, note2feat_links = self._map_note_segments_to_features(
-            note_segments, features, feat2note_links
-        )
-        return (feat2note_links, features) if self.query_key == "features" else (note2feat_links, shuffled_features)
+        target_features = self._map_sources_to_entities(note_segments, labels)
+        shuffled_features, shuffled_targets = self._shuffle_features(features, target_features)
+        return shuffled_features, shuffled_targets
 
     def _format_row(self, row: dict[str, typ.Any]) -> dict[str, typ.Any]:
         struct_row = self.input_model(**row)
         note_segments = list(self.segmenter(struct_row.patient_note))
-        note_sentences = [chunk.text for chunk in note_segments]
-        features = list(struct_row.features.values())
-        labels = None
-        if struct_row.labels:
-            labels, features = self._create_labels(struct_row.labels, note_segments, features)
-        corpus, queries = self._set_corpus_and_queries(note_sentences, features)
+        segments = [chunk.text for chunk in note_segments]
+        entities, labels = self._create_labels(struct_row.labels, note_segments, struct_row.features)
         return {
             "aid": f"{struct_row.case_num}_{struct_row.pn_num}",
-            "corpus": corpus,
-            "queries": queries,
+            "entities": entities,
+            "segments": segments,
             "labels": labels,
         }
 

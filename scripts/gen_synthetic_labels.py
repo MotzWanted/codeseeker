@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from alignment.aligners.llm import create_llm_aligner
 from alignment.ops import HfSyntheticAlignment
-from dataloader.loaders.nbme_notes import NbmeDatasetLoader
+from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
 from dataloader.adapters.alignment import NbmeAdapter
 from throughster.factory import create_interface
 from segmenters import factory, Segmenter
@@ -44,9 +44,6 @@ class Arguments(BaseSettings):
     seed: str = "1"  # e.g., "1:2:3:4:5"
     n_samples: int = 1
     threshold: float = 0.0
-
-    corpus_key: str = "features"  # the corpus indices to predict
-    query_key: str = "patient_note"  # the queries given for predicting indices, e.g., transcript or patient note
 
     num_workers: int = 16
     batch_size: int = 1
@@ -115,7 +112,7 @@ def run(args: Arguments):
     loader = NbmeDatasetLoader()
     eval_data: datasets.Dataset = loader(split=args.split, size=args.size, num_proc=args.num_workers)  # type: ignore
     segmenter: Segmenter = factory(args.segmenter, args.spacy_model)  # noqa: F821
-    adapter = NbmeAdapter(segmenter=segmenter, query_key=args.query_key, binary_fewshots=args.aligner_type == "binary")
+    adapter = NbmeAdapter(segmenter=segmenter)
     eval_data = eval_data.map(
         adapter,
         num_proc=args.num_workers,

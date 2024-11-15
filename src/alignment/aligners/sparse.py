@@ -6,6 +6,7 @@ import typing as typ
 import pydantic
 from alignment.base import Aligner
 from alignment.models import Alignment
+from segmenters.models import Segment
 from tools import lexicon as um
 import ahocorasick
 from intervaltree import IntervalTree
@@ -250,7 +251,7 @@ class WordMatchAligner(Aligner):
         matches: typ.Iterable[Match] = self.aligner(queries, concatenated_corpus)
 
         indices = self._decode_indices(matches, len(queries), offsets)
-        return Alignment(indices)
+        return Alignment(indexes=indices)
 
     def _decode_indices(self, matches: typ.Iterable[Match], num_queries: int, offsets: IntervalTree) -> list[list[int]]:
         """Build the indices matrix from matches."""

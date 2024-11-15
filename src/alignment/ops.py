@@ -29,6 +29,7 @@ class HfAlignment(HfOperation):
         batch_size = len(batch[list(batch.keys())[0]])
 
         batch_rows = [{key: value[i] for key, value in batch.items()} for i in range(batch_size)]
+
         responses = asyncio.run(self._async_call_wrapper(batch_rows))
 
         output = defaultdict(list)
@@ -39,7 +40,7 @@ class HfAlignment(HfOperation):
 
             labels_matrix = None
             if "labels" in batch and batch["labels"][i]:
-                labels_matrix = list2matrix(len(batch["queries"][i]), len(batch["corpus"][i]), batch["labels"][i])
+                labels_matrix = list2matrix(len(batch["segments"][i]), len(batch["entities"][i]), batch["labels"][i])
             output["labels_matrix"].append(labels_matrix)
 
         return {
@@ -53,7 +54,7 @@ class HfAlignment(HfOperation):
 
     def _validate_input(self, batch: dict[str, list[typ.Any]]) -> None:
         """Validate the input batch."""
-        for key in ["corpus", "queries"]:
+        for key in ["entities", "segments"]:
             if key not in batch:
                 raise ValueError(f"Missing key: {key}. Available keys: {batch.keys()}")
             if key and not isinstance(batch[key], list):
@@ -78,7 +79,7 @@ class HfSyntheticAlignment(HfOperation):
         self._validate_input(row)
 
         if "labels" in row and row["labels"]:
-            sparse_matrix = list2matrix(len(row["queries"]), len(row["corpus"]), row["labels"])
+            sparse_matrix = list2matrix(len(row["segments"]), len(row["entities"]), row["labels"])
             alignment_data = Alignment(indexes=row["labels"], matrix=sparse_matrix, probabilities=sparse_matrix)
             return {
                 **row,
@@ -105,7 +106,7 @@ class HfSyntheticAlignment(HfOperation):
 
     def _validate_input(self, batch: dict[str, list[typ.Any]]) -> None:
         """Validate the input batch."""
-        for key in ["corpus", "queries"]:
+        for key in ["entities", "segments"]:
             if key not in batch:
                 raise ValueError(f"Missing key: {key}. Available keys: {batch.keys()}")
             if key and not isinstance(batch[key], list):

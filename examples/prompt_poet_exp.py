@@ -5,8 +5,9 @@ import typing as typ
 from prompt_poet import Prompt
 import rich
 
-from dataloader.loaders.nbme_notes import NbmeDatasetLoader
-from dataloader.adapters.alignment import NmbeAdapter, SentenceSegmenter
+from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
+from dataloader.adapters.alignment import NbmeAdapter
+from segmenters.base import WindowSegmenter
 
 
 def custom_tojson(value):
@@ -101,7 +102,7 @@ class PromptFormatter:
 
         return output
 
-    def _format_prompt(self, source: str, target: str, fewshots: list[dict[str, typ.Any]]) -> list[dict, str]:
+    def _format_prompt(self, source: str, target: str, fewshots: list[dict[str, typ.Any]]) -> list[dict | str]:
         """Format the prompt."""
         fewshots = self._format_fewshots(fewshots)
         prompt = Prompt(
@@ -139,11 +140,11 @@ class PromptFormatter:
 def run():
     data: datasets.Dataset = NbmeDatasetLoader().load_dataset(split="test", size=300)  # type: ignore
 
-    adapter = NmbeAdapter(segmenter=SentenceSegmenter())
+    adapter = NbmeAdapter(segmenter=WindowSegmenter())
     data = data.map(
         adapter,
         num_proc=1,
-        desc=f"Adapting dataset to `AlignmentModel` using `{NmbeAdapter.__name__}`.",
+        desc=f"Adapting dataset to `AlignmentModel` using `{NbmeAdapter.__name__}`.",
         remove_columns=_get_dataset(data).column_names,
         # load_from_cache_file=False,
     )

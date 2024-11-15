@@ -4,8 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 import matplotlib.pyplot as plt
 import datasets
 
-from dataloader.adapters.alignment import NmbeAdapter
-from dataloader.loaders.nbme_notes import NbmeDatasetLoader
+from dataloader.adapters.alignment import NbmeAdapter
+from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
 from segmenters import factory, Segmenter
 
 PLOTS_FOLDER = Path(__file__).parent.parent / "reports" / "plots"
@@ -18,9 +18,6 @@ class Arguments(BaseSettings):
     segmenter: str = "nbme:window:spacy"  # spacy | sentence | nbme
     spacy_model: str = "en_core_web_trf"
     n_samples: int = 500
-
-    corpus_key: str = "features"  # the corpus indices to predict
-    query_key: str = "patient_note"  # the queries given for predicting indices, e.g., transcript or patient note
 
     num_workers: int = 12
 
@@ -76,8 +73,8 @@ def plot_labels_lengths(segmented_data: list[datasets.Dataset], segmenters: list
     for lengths, segmenter in zip(labels_lengths_list, segmenters):
         ax.hist(lengths, bins=5, alpha=0.5, label=segmenter)
 
-    ax.set_title("Distribution of Corpus Lengths Across Segmenters")
-    ax.set_xlabel("Length of Corpus Entries")
+    ax.set_title("Distribution of Segment Lengths Across Segmenters")
+    ax.set_xlabel("Number of Entities")
     ax.set_ylabel("Frequency")
     ax.legend(loc="upper right")
 
@@ -87,16 +84,17 @@ def plot_labels_lengths(segmented_data: list[datasets.Dataset], segmenters: list
 
 def run(args: Arguments):
     """Run the script."""
-    data: datasets.Dataset = NbmeDatasetLoader().load_dataset(split="test", size=args.n_samples)
+    loader = NbmeDatasetLoader()
+    data: datasets.Dataset = loader(split="test", size=args.n_samples)  # type: ignore
     segmenters_ = [x for x in args.segmenter.split(":")] if ":" in args.segmenter else [args.segmenter]
     segmented_data = []
     for s in segmenters_:
         segmenter: Segmenter = factory(s, args.spacy_model)  # noqa: F821
-        adapter = NmbeAdapter(segmenter=segmenter, query_key=args.query_key)
+        adapter = NbmeAdapter(segmenter=segmenter)
         temp_data = data.map(
             adapter,
             num_proc=args.num_workers,
-            desc=f"Adapting dataset to `{NmbeAdapter.__name__}` using `{segmenter.__class__.__name__}`.",
+            desc=f"Adapting dataset to `{NbmeAdapter.__name__}` using `{segmenter.__class__.__name__}`.",
             remove_columns=_get_dataset(data).column_names,
         )
         segmented_data.append(temp_data)

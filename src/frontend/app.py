@@ -75,7 +75,7 @@ async def chunk_transcript(
 ) -> list[str]:
     """Chunk the transcript."""
     requests = {
-        "messages": Prompt(prompt_template, {"transcript": transcript}),
+        "messages": Prompt(prompt_template, template_data={"transcript": transcript}),
         **sampling_params,
     }
 

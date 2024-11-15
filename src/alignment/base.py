@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 
-import numba
 import numpy as np
 
 from alignment.models import Alignment
@@ -17,7 +16,7 @@ def list2matrix(dim_x: int, dim_y: int, alignment_indices: list[list[int | float
     return sparse_matrix
 
 
-@numba.jit(cache=True, nogil=True, fastmath=True)
+# @numba.jit(cache=True, nogil=True, fastmath=True)
 def matrix2list(sparse_matrix: np.ndarray) -> list:
     alignment_indices = []
     for i in range(sparse_matrix.shape[0]):
