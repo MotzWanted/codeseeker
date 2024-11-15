@@ -10,8 +10,8 @@
   content: |
     ====== Clinical Concepts ======
     ID: 0 | Content: "None" | ID END: 0
-    {% for doc in corpus %}
-    ID: {{ loop.index }} | Content: {{ custom_tojson(doc) }} | ID END: {{ loop.index }}
+    {% for ent in entities %}
+    ID: {{ loop.index }} | Content: {{ custom_tojson(ent) }} | ID END: {{ loop.index }}
     {% endfor %}\n
     
 {% for shot in fewshots %}
@@ -22,8 +22,8 @@
     ====== Example {{ loop.index }} ======
     Which documents are referenced in the claim? Use ID 0 if the claim is not referenced. Output the selected document IDs as a list in JSON format.
 
-    Text: "{{ custom_tojson(shot.query | escape) }}"
-    Answer: "{{ custom_tojson({"ids": shot.labels}) }}"\n
+    Text: {{ custom_tojson(shot.segment | escape) }}
+    Answer: {{ custom_tojson({"ids": shot.labels}) }}\n
 {% endfor %}
    
 - name: new input
@@ -32,5 +32,5 @@
     ====== Now let's start! ======
     Which clinical concepts are expressed in the text? Use ID 0 if none is expressed. Output the selected concept IDs as a list in JSON format.
 
-    Text: "{{ custom_tojson(query | escape) }}"
+    Text: {{ custom_tojson(segment | escape) }}
     Answer:

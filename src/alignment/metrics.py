@@ -23,13 +23,12 @@ class AlignmentMetrics:
         labels = batch[self.labels_key]
         predictions = batch[self.predictions_key]
 
+        results = self.generate_metrics(labels, predictions)
         outputs = defaultdict(list)
-        for example in zip(labels, predictions):
-            results = self.generate_metrics(*example)
-            for metric, value in results.items():
-                outputs[metric].append(value)
+        for metric, value in results.items():
+            outputs[metric].append(value)
 
-        return {**batch, **outputs}
+        return {**outputs}
 
     def generate_metrics(self, labels: list[list[int]], predictions: list[list[int]]) -> dict[AvailableMetrics, float]:
         """Generate the metrics."""

@@ -1,6 +1,3 @@
-from prompt_poet import Prompt
-
-
 SAMPLING_PARAMS = {"temperature": 0.9}
 
 
@@ -20,8 +17,6 @@ Transcript: "{{ transcript }}"
 """,
     }
 ]
-
-ChunkingPrompt = Prompt()
 
 ALIGMENT_PARAMS = {
     "prompt_name": "loft",

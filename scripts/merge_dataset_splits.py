@@ -11,7 +11,7 @@ from dataloader.adapters.alignment import (
     NbmeAdapter,
     SyntheticAlignmentModel,
 )
-from dataloader.loaders.nbme_notes import NbmeDatasetLoader
+from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
 from segmenters.base import Segmenter, factory
 
 
@@ -59,12 +59,12 @@ class Test2Training(AlignmentAdapterForTraining):
         return [
             AlignmentModelForTraining(
                 aid=f"{struct_row.aid}-{idx}",
-                corpus=struct_row.corpus,
-                query=query,
+                entities=struct_row.entities,
+                segment=segment,
                 targets=label,
                 probabilities=None,
             )
-            for idx, (query, label) in enumerate(zip(struct_row.queries, struct_row.labels))
+            for idx, (segment, label) in enumerate(zip(struct_row.segments, struct_row.labels))
         ]
 
 
@@ -84,13 +84,13 @@ class Synthetic2Training(AlignmentAdapterForTraining):
         return [
             AlignmentModelForTraining(
                 aid=f"{struct_row.aid}-{idx}",
-                corpus=struct_row.corpus,
-                query=query,
+                entities=struct_row.entities,
+                segment=segment,
                 targets=prediction,
                 probabilities=[p for p in probs if p > 0.0],
             )
-            for idx, (query, prediction, probs) in enumerate(
-                zip(struct_row.queries, struct_row.predictions, struct_row.probabilities)
+            for idx, (segment, prediction, probs) in enumerate(
+                zip(struct_row.segments, struct_row.predictions, struct_row.probabilities)
             )
         ]
 
@@ -108,7 +108,7 @@ dataset_path = "/Users/amo/research/patient-note-alignment/synthetic-data/Meta-L
 full_train: datasets.Dataset = datasets.load_from_disk(dataset_path)  # type: ignore
 test: datasets.Dataset = NbmeDatasetLoader().load_dataset(split="test", num_proc=NUM_WORKERS)  # type: ignore
 segmenter: Segmenter = factory("nbme", "en_core_web_lg")  # noqa: F821
-adapter = NbmeAdapter(segmenter=segmenter, query_key="patient_note")
+adapter = NbmeAdapter(segmenter=segmenter)
 test = test.map(
     adapter,
     num_proc=NUM_WORKERS,

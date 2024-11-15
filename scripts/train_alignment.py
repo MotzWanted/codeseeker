@@ -42,8 +42,8 @@ class FilterSyntheticData:
         batch_size = len(batch[list(batch.keys())[0]])
         # Iterate through each example in the batch
         for idx in range(batch_size):
-            # Skip if the corpus has not been segmented properly
-            if len(batch["corpus"][idx]) < 2:
+            # Skip if the segments has not been splitted properly
+            if len(batch["segments"][idx]) < 2:
                 continue
             np_targets = np.array(batch["targets"][idx])
             np_probs = np.array(batch["probabilities"][idx])
@@ -60,8 +60,8 @@ class FilterSyntheticData:
                 continue
 
             output["aid"].append(batch["aid"][idx])
-            output["corpus"].append(batch["corpus"][idx])
-            output["query"].append(batch["query"][idx])
+            output["entities"].append(batch["entities"][idx])
+            output["segment"].append(batch["segment"][idx])
             output["targets"].append(list(np_targets[mask]))
             output["probabilities"].append(list(np_probs[mask]))
             output["extras"].append(batch["extras"][idx])

@@ -1,5 +1,5 @@
 import datasets
-from dataloader.loaders.nbme_notes import NbmeDatasetLoader
+from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
 from dataloader.adapters.alignment import NbmeAdapter
 from segmenters import factory
 
@@ -13,7 +13,7 @@ def _get_dataset(dset: datasets.Dataset | datasets.DatasetDict) -> datasets.Data
 
 nbme_data: datasets.Dataset = NbmeDatasetLoader().load_dataset(split="test")  # type: ignore
 
-adapter = NbmeAdapter(segmenter=factory("nbme", spacy_model="en_core_web_lg"), query_key="patient_note")
+adapter = NbmeAdapter(segmenter=factory("nbme", spacy_model="en_core_web_lg"))
 nbme_data = nbme_data.map(
     adapter,
     desc=f"Adapting dataset to `AlignmentModel` using `{NbmeAdapter.__name__}`.",
