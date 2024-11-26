@@ -4,6 +4,7 @@ from pathlib import Path
 import random
 import typing as typ
 
+from jinja2 import Environment, FileSystemLoader
 from loguru import logger
 import numpy as np
 from prompt_poet import Prompt
@@ -30,7 +31,9 @@ class LLMAligner(Aligner):
     def __init__(
         self, prompt_name: str, num_shots: int, token_limit: int, seed: int, sampling_params: dict[str, typ.Any]
     ):
-        self.template_path = PATH_TO_TEMPLATES / f"{prompt_name}.yml.j2"
+        env = Environment(loader=FileSystemLoader(PATH_TO_TEMPLATES))
+        loader = typ.cast(FileSystemLoader, env.loader)
+        self.raw_template, self.template_path, _ = loader.get_source(env, f"{prompt_name}.yml.j2")
         self.prompt_name = prompt_name
         self.num_shots = num_shots
         self.token_limit = token_limit
@@ -59,8 +62,7 @@ class LLMAligner(Aligner):
     @abc.abstractmethod
     async def generate_alignments(
         self, client: ModelInterface, entities: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
-    ) -> list[tuple[np.ndarray, np.ndarray]]:
-        ...
+    ) -> list[tuple[np.ndarray, np.ndarray]]: ...
 
     @staticmethod
     def normalized_exp_values(top_logprobs: np.ndarray, axis: int) -> np.ndarray:
@@ -78,7 +80,7 @@ class LLMAligner(Aligner):
     def format_prompt(self, template_data: dict[str, typ.Any], truncation_step: int = 1) -> Prompt:
         """Format the prompt."""
         return Prompt(
-            template_path=self.template_path,
+            raw_template=self.raw_template,
             template_data=template_data,
             token_limit=self.token_limit,
             truncation_step=truncation_step,
@@ -128,22 +130,29 @@ class StructuredLLMAligner(LLMAligner):
         responses: list[BaseResponse] = await client.structured_batch_call(
             requests=requests, schema=AlignmentSingleton, max_attempts=self.max_attempts
         )
-
         results = []
         for response in responses:
-            if isinstance(response, StructuredResponseError):
-                # If the response is an error, return a zero matrix
-                return [(np.zeros(len(entities)), np.zeros(len(entities)))]
-            sparse_vector = np.zeros(len(entities))
-            probs_vector = np.zeros(len(entities))
+            if isinstance(response, (StructuredResponseError, type(None))):
+                # If the response is an error, return a zero prediction
+                results.append((np.zeros(len(entities)), np.zeros(len(entities))))
+                continue
             preds, probs = self.compress_choices(response.choices, entities_size=len(entities) + 1)
-            for i, _ in enumerate(entities, start=1):
-                if i not in preds:
-                    continue
-                sparse_vector[i - 1] = 1
-                probs_vector[i - 1] = probs[preds.index(i)]
+            sparse_vector, probs_vector = self.parse_response(preds, probs, entities)
             results.append((sparse_vector, probs_vector))
         return results
+
+    def parse_response(
+        self, preds: list[int], probs: list[float], entities: list[str]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Parse the response and return the alignment."""
+        sparse_vector = np.zeros(len(entities))
+        probs_vector = np.zeros(len(entities))
+        for i, _ in enumerate(entities, start=1):
+            if i not in preds:
+                continue
+            sparse_vector[i - 1] = 1
+            probs_vector[i - 1] = probs[preds.index(i)]
+        return sparse_vector, probs_vector
 
     def format_request(
         self, client: ModelInterface, segment: str, entities: list[str], fewshots: list[dict[str, typ.Any]]
@@ -218,6 +227,47 @@ class StructuredLLMAligner(LLMAligner):
         return {k: v for k, v in top_logprobs.items() if self._is_predicted_alignment(k, entities_size)}
 
 
+class StructuredLLMSelfAligner(StructuredLLMAligner):
+    """A LLM-based Alignment model applying long-context retrieval."""
+
+    def __init__(self, max_attempts: int = 5, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_attempts = max_attempts
+
+    async def generate_alignments(
+        self, client: ModelInterface, entities: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
+        """Generate an alignment for a task."""
+        results = []
+        extended_fewshots = fewshots.copy()
+        for s in segments:
+            request = self.format_request(client, entities=entities, segment=s, fewshots=extended_fewshots)
+            try:
+                response: BaseResponse = await client.structured_call(request=request, schema=AlignmentSingleton)
+                preds, probs = self.compress_choices(response.choices, entities_size=len(entities) + 1)
+                sparse_vector, probs_vector = self.parse_response(preds, probs, entities)
+                results.append((sparse_vector, probs_vector))
+            except StructuredResponseError:
+                results.append((np.zeros(len(entities)), np.zeros(len(entities))))
+                continue
+            # Add the predictions to the fewshots for the next segment
+            extended_fewshots.append({"segment": s, "labels": preds})
+        return results
+
+    def format_request(
+        self, client: ModelInterface, segment: str, entities: list[str], fewshots: list[dict[str, typ.Any]]
+    ) -> dict[str, typ.Any]:
+        """Predict the true/false alignment."""
+        prompt_template = self.format_prompt_with_shots(fewshots, segment=segment, entities=entities)
+        prompt = self.prompt_messages_or_string(client, prompt_template)
+        return {
+            "prompt": prompt,
+            "seed": self.seed,
+            "stop": ["\n\n\n"],
+            **self.sampling_params,
+        }
+
+
 def create_llm_aligner(
     aligner_type: str,
     prompt_name: str,
@@ -244,6 +294,14 @@ def create_llm_aligner(
     #     return BinaryLLMAligner(prompt_name, num_shots, token_limit, seed, sampling_params)
     if aligner_type == "structured":
         return StructuredLLMAligner(
+            prompt_name=prompt_name,
+            num_shots=num_shots,
+            token_limit=token_limit,
+            seed=seed,
+            sampling_params=sampling_params,
+        )
+    elif aligner_type == "structured_self":
+        return StructuredLLMSelfAligner(
             prompt_name=prompt_name,
             num_shots=num_shots,
             token_limit=token_limit,

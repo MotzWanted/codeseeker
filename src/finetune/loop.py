@@ -20,7 +20,7 @@ from .helpers import unwrapped_model
 from .monitor import Monitor
 
 
-def training(  # noqa: C901,, PLR0913, PLR0915
+def training(
     *,
     fabric: L.Fabric,
     model: transformers.PreTrainedModel,
@@ -89,7 +89,7 @@ def training(  # noqa: C901,, PLR0913, PLR0915
         )
     if not is_wrapped(optimizer):
         raise ValueError(
-            "The optimizer must be wrapped with the lightning fabric. Use `fabric.setup_optimizers(optimizer)` to do so."
+            "The optimizer must be wrapped with the lightning fabric. Use `fabric.setup_optimizers(optimizer)` to do so"
         )
     generate_freq = eval_freq if generate_freq < 0 else generate_freq
     if not generate_freq % eval_freq == 0:
@@ -226,7 +226,7 @@ def training(  # noqa: C901,, PLR0913, PLR0915
 
 
 @torch.no_grad()
-def evaluate(  # noqa: PLR0913
+def evaluate(
     *,
     step: int,
     fabric: L.Fabric,

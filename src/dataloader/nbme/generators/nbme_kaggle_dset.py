@@ -28,9 +28,10 @@ class NmbePatientNoteModel(pydantic.BaseModel):
     case_num: int
     patient_note: str
     features: dict[int, str]
+    case_features: dict[int, str]
     labels: NmbeAnnotationModel | None
 
-    @pydantic.field_validator("features", mode="before")
+    @pydantic.field_validator("features", "case_features", mode="before")
     @classmethod
     def validate_features(cls, v: dict | str) -> dict:
         """Ensure that features are always a dictionary."""
@@ -92,9 +93,8 @@ class NbmePatientNotesConfig(datasets.BuilderConfig):
 class NbmePatientNotes(datasets.GeneratorBasedBuilder):
     """nbme-score-clinical-patient-notes: a corpus of clinical patient notes."""
 
-    def __init__(self, *args, seed: int = 42, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        np.random.seed(seed)  # Set the seed for reproducibility
 
     BUILDER_CONFIGS = [
         NbmePatientNotesConfig(
@@ -113,6 +113,7 @@ class NbmePatientNotes(datasets.GeneratorBasedBuilder):
                     "case_num": datasets.Value("int64"),
                     "patient_note": datasets.Value("string"),
                     "features": datasets.Value("string"),
+                    "case_features": datasets.Value("string"),
                     "labels": datasets.Features(
                         {
                             "pn_num": datasets.Value("int64"),
@@ -178,15 +179,19 @@ class NbmePatientNotes(datasets.GeneratorBasedBuilder):
         features_dict = features.set_index("feature_num")["feature_text"].to_dict()
 
         # Add the features dictionary to each row in merged_data
+        merged_data["case_features"] = merged_data["case_num"].apply(
+            lambda x: {fn: features_dict[fn] for fn in features[features["case_num"] == x]["feature_num"].values}
+        )
         merged_data["features"] = merged_data.apply(lambda x: features_dict, axis=1)
 
         # Select and rename columns to match the desired output format
-        final_data = merged_data[["pn_num", "case_num", "pn_history", "features", "labels"]]
+        final_data = merged_data[["pn_num", "case_num", "pn_history", "features", "case_features", "labels"]]
         final_data.columns = [
             "pn_num",
             "case_num",
             "patient_note",
             "features",
+            "case_features",
             "labels",
         ]
 
@@ -231,6 +236,7 @@ class NbmePatientNotes(datasets.GeneratorBasedBuilder):
                         "case_num": row["case_num"],
                         "patient_note": row["patient_note"],
                         "features": row["features"],
+                        "case_features": row["case_features"],
                         "labels": row["labels"],
                     }
                 ).model_dump(),

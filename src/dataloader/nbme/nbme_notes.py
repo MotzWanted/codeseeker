@@ -6,7 +6,7 @@ import datasets
 from datasets.utils.logging import disable_progress_bar, enable_progress_bar
 import numpy as np
 
-from dataloader.loaders.nbme.constants import NBME_PATH
+from dataloader.nbme.constants import NBME_PATH
 
 logger = datasets.logging.get_logger(__name__)
 

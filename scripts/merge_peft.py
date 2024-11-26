@@ -2,6 +2,7 @@
 
 Adapted from https://github.com/eugenepentland/landmark-attention-qlora/blob/main/llama/merge_peft.py
 """
+
 import json
 import pathlib
 import shutil
@@ -28,7 +29,7 @@ def main(args: Args) -> None:
     """Main function."""
     input_dir = pathlib.Path(args.input_dir)
     output_dir = pathlib.Path(args.output_dir.format(**args.model_dump()))
-    if args.device == "auto":  # noqa: SIM108
+    if args.device == "auto":
         device_arg = {"device_map": "auto"}
     else:
         device_arg = {"device_map": {"": args.device}}

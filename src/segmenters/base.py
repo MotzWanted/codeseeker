@@ -21,7 +21,7 @@ def _load_spacy_model(model_name: str) -> Language:
 
 # @numba.njit(cache=True, nogil=True, fastmath=True)
 def _is_within_bounds(x: int, spans: np.ndarray) -> bool:
-    for s in spans:  # noqa: SIM110
+    for s in spans:
         if x >= s[0] and x <= s[1]:
             return True
     return False

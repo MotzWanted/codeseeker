@@ -37,7 +37,7 @@ raw_template = """
     # Output
     Please output in JSON format, e.g., `{"indices": [3, 5]}`. If the hypothesis is not supported, output a zero list: `{"indices": [0]}`.
 {% endif %}
-    
+
 {% for shot in few_shots %}
 - name: few shot (k={{ loop.index }})
   role: user
@@ -46,7 +46,7 @@ raw_template = """
     ====== Example case {{ loop.index }} ======
     # Documentation:
     {% for option in shot.sources %}
-    [{{ loop.index }}] "{{ custom_tojson(option) }}" 
+    [{{ loop.index }}] "{{ custom_tojson(option) }}"
     {% endfor %}
     {% for data in shot.targets %}
     # Example {{ loop.index }}
@@ -55,14 +55,14 @@ raw_template = """
     {% endfor %}
 
 {% endfor %}
-   
+
 - name: new input
   role: user
   content: |
     ====== Now it's your turn! ======
     # Documentation:
     {% for option in input_list %}
-    [{{ loop.index }}] "{{ custom_tojson(option) }}" 
+    [{{ loop.index }}] "{{ custom_tojson(option) }}"
     {% endfor %}
     # New example
     Hypothesis: "{{ fact | escape }}"

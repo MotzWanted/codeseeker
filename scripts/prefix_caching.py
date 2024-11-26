@@ -15,7 +15,7 @@ async def generate(client: ModelInterface, prompts: list[dict], sampling_params:
 
 prefix = {
     "role": "system",
-    "content": """You are an expert school principal, skilled in effectively managing faculty and staff. 
+    "content": """You are an expert school principal, skilled in effectively managing faculty and staff.
     Draft 10-15 questions for a potential first grade Head Teacher for""",
 }
 

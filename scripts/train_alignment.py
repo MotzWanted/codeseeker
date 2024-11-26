@@ -148,7 +148,7 @@ def parse_prediction(pred: str) -> set[int]:
     return {x for x in out if x is not None}
 
 
-def run(args: Arguments) -> None:  # noqa: C901, PLR0915
+def run(args: Arguments) -> None:
     """Train a Multi-segment classification model."""
     helpers.setup_env()
     output_path = helpers.setup_output_dir(args.output_path, args)
@@ -318,7 +318,7 @@ def run(args: Arguments) -> None:  # noqa: C901, PLR0915
     )
 
 
-def _cast_torch(x: typ.Any) -> typ.Any:  # noqa: ANN401
+def _cast_torch(x: typ.Any) -> typ.Any:
     if isinstance(x, torch.Tensor):
         return x.detach().cpu().numpy().mean().item()
     return x
@@ -504,7 +504,7 @@ class _AlignCollateFn:
 
     prompt: typ.Callable[[AlignmentModelForTraining], tuple[str, str]]
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,
         tokenizer: transformers.PreTrainedTokenizerBase,

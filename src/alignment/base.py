@@ -33,5 +33,4 @@ class Aligner(ABC):
     """An abstract class for an alignment model."""
 
     @abstractmethod
-    async def predict(self, *args, **kwargs) -> Alignment:
-        ...
+    async def predict(self, *args, **kwargs) -> Alignment: ...

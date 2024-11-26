@@ -1,8 +1,8 @@
 - name: system instructions
   role: system
   content: |
-    <s>[INST]You will be given a list of clinical concepts. You need to read carefully and understand all of them. 
-    Then you will be given a text that may express 1 or more clinical concepts. 
+    <s>[INST]You will be given a list of clinical concepts. You need to read carefully and understand all of them.
+    Then you will be given a text that may express 1 or more clinical concepts.
     Your goal is to identify if a clinical concept is referenced and select the concept IDs that is expressed in the given text.\n
 
 - name: corpus
@@ -13,7 +13,7 @@
     {% for doc in corpus %}
     ID: {{ loop.index }} | Concept: {{ custom_tojson(doc) }} | ID END: {{ loop.index }}
     {% endfor %}\n
-    
+
 {% for shot in fewshots %}
 - name: few shots {{ loop.index }}
   role: user
@@ -25,7 +25,7 @@
     Text: "{{ custom_tojson(shot.query | escape) }}"
     Answer: "{{ custom_tojson({"ids": shot.labels}) }}"\n
 {% endfor %}
-   
+
 - name: new input
   role: user
   content: |

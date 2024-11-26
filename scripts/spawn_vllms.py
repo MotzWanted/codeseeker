@@ -16,9 +16,7 @@ from docgen.tools.arguantic import Arguantic
 
 def get_gpu_pids() -> dict[str, list[str]]:
     """Return a dict of PIDs by GPU index."""
-    command_output = subprocess.check_output(
-        ["nvidia-smi", "-L"]  # noqa: S603, S607
-    )
+    command_output = subprocess.check_output(["nvidia-smi", "-L"])
     uuids_to_index = {}
     for line in command_output.decode().split("\n"):
         if not line or "MIG" in line:
@@ -32,7 +30,7 @@ def get_gpu_pids() -> dict[str, list[str]]:
         uuids_to_index[uuid] = index
 
     command_output = subprocess.check_output(
-        ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid", "--format=csv,noheader"]  # noqa: S603, S607
+        ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid", "--format=csv,noheader"]
     )
     ids_to_users = {i: [] for i in uuids_to_index.values()}
     for line in command_output.decode().split("\n"):
@@ -93,7 +91,7 @@ def spawn_servers(args: Args) -> None:
 
             # spawn server
             server_proc = subprocess.Popen(
-                command,  # noqa: S603
+                command,
                 env=env_vars,
                 stdout=stdout_file.open("w") if stdout_file else None,
                 stderr=stderr_file.open("w") if stderr_file else None,

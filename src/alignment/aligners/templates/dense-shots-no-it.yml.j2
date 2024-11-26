@@ -1,8 +1,8 @@
 - name: system instructions
   role: system
   content: |
-    You will be given a list of documents. You need to read carefully and understand all of them. 
-    Then you will be given a claim that may be supported by 1 or more documents. 
+    You will be given a list of documents. You need to read carefully and understand all of them.
+    Then you will be given a claim that may be supported by 1 or more documents.
     Your goal is to identify if the claim is supported and select the documentation IDs that provide evidence for the given claim.
 
 
@@ -22,7 +22,7 @@
     Final Answer: "{{ custom_tojson({"ids": shot.labels}) }}"
 
 {% endfor %}
-   
+
 - name: new input
   role: user
   content: |

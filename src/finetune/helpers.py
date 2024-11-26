@@ -37,7 +37,7 @@ def load_tokenizer(
     return tokenizer
 
 
-def load_pretrained_lm(  # noqa: PLR0913
+def load_pretrained_lm(
     backbone: str,
     *,
     quantize: str = "none",
@@ -333,7 +333,7 @@ class PatternStoppingCriteria(generate_stops.StoppingCriteria):
         pattern_token_ids = [tokenizer.encode(p, add_special_tokens=False, return_tensors="pt") for p in patterns]
         self.pattern_token_ids: list[torch.LongTensor] = pattern_token_ids  # type: ignore
 
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs: typ.Any) -> bool:  # noqa: ARG002
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs: typ.Any) -> bool:
         """Check if the generated sequence contains one of the patterns."""
         self.pattern_token_ids = [p.to(input_ids.device) for p in self.pattern_token_ids]  # type: ignore
         for pattern in self.pattern_token_ids:
@@ -542,7 +542,7 @@ def merge_and_unload_lora(model: transformers.PreTrainedModel) -> transformers.P
     for module in model.modules():
         if isinstance(module, lora.LoraLayer):
             module.merge_and_unload()
-            assert module.merged  # noqa: S101
+            assert module.merged
 
     return model
 
