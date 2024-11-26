@@ -132,10 +132,11 @@ class NmbePatientNoteModel(pydantic.BaseModel):
     case_num: int
     patient_note: str
     features: dict[int, str]
+    case_features: dict[int, str]
     labels: NmbeAnnotationModel | None
     few_shot: None | list["NmbePatientNoteModel"] = None
 
-    @pydantic.field_validator("features", mode="before")
+    @pydantic.field_validator("features", "case_features", mode="before")
     @classmethod
     def validate_features(cls, v: dict | str) -> dict:
         """Ensure that features are always a dictionary."""
@@ -165,9 +166,11 @@ class NbmeAdapter(AlignmentAdapter):
     def __init__(
         self,
         segmenter: Segmenter,
+        negatives: int = 0,  # number of negative samples to include
         seed: int = 42,
     ) -> None:
         self.segmenter = segmenter
+        self.negatives = negatives
         self.seed = seed
 
     def is_compatible(self, row: dict[str, typ.Any]) -> bool:
@@ -259,6 +262,23 @@ class NbmeAdapter(AlignmentAdapter):
                 )
         return flatten_fewshots[:1000]  # putting a cap on the number of shots
 
+    def _sample_negatives(self, features: dict[int, str], targets: list[list[int]]) -> dict[int, str]:
+        """Sample negative features."""
+        if self.negatives < 0:
+            # Return all features if negatives is less than zero
+            return features
+
+        positive_features = {key for inner_list in targets for key in inner_list}
+        if self.negatives == 0:
+            # Return only positive features
+            return {k: v for k, v in features.items() if k in positive_features}
+
+        negative_features = {key for key in features if key not in positive_features}
+        random.seed(self.seed)
+        negative_samples = random.sample(list(negative_features), min(self.negatives, len(negative_features)))
+
+        return {k: v for k, v in features.items() if k in set.union(positive_features, negative_samples)}
+
     def _shuffle_features(
         self, features: dict[int, str], targets: list[list[int]]
     ) -> tuple[list[str], list[list[int]]]:
@@ -288,6 +308,7 @@ class NbmeAdapter(AlignmentAdapter):
         if not labels:
             return []
         target_features = self._map_sources_to_entities(note_segments, labels)
+        features = self._sample_negatives(features, target_features)
         shuffled_features, shuffled_targets = self._shuffle_features(features, target_features)
         return shuffled_features, shuffled_targets
 

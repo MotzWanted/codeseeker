@@ -148,3 +148,5 @@ tests/reports
 .DS_Store
 throughput/*
 .exceptions/*
+
+data/*/raw/*

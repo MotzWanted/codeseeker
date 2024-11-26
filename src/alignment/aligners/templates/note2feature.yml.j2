@@ -1,8 +1,8 @@
 - name: system instructions
   role: system
   content: |
-    You will be given a list of clinical concepts. You need to read carefully and understand all of them. 
-    Then you will be given a passage from a medical document where there may be expressed 1 or more clinical concepts. 
+    You will be given a list of clinical concepts. You need to read carefully and understand all of them.
+    Then you will be given a passage from a medical document where there may be expressed 1 or more clinical concepts.
     Your goal is to identify if any clinical concepts are expressed and select the concept IDs that are expressed in the given text.\n
 
 - name: clinical concepts
@@ -13,19 +13,19 @@
     {% for ent in entities %}
     ID: {{ loop.index }} | Content: {{ custom_tojson(ent) }} | ID END: {{ loop.index }}
     {% endfor %}\n
-    
+
 {% for shot in fewshots %}
 - name: few shots {{ loop.index }}
   role: user
   truncation_priority: {{ loop.index }}
   content: |
     ====== Example {{ loop.index }} ======
-    Which documents are referenced in the claim? Use ID 0 if the claim is not referenced. Output the selected document IDs as a list in JSON format.
+    Which clinical concepts are expressed in the text? Use ID 0 if none is expressed. Output the selected concept IDs as a list in JSON format.
 
     Text: {{ custom_tojson(shot.segment | escape) }}
     Answer: {{ custom_tojson({"ids": shot.labels}) }}\n
 {% endfor %}
-   
+
 - name: new input
   role: user
   content: |

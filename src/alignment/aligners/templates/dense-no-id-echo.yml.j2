@@ -1,8 +1,8 @@
 - name: system instructions
   role: system
   content: |
-    You will be given a list of documents. You need to read carefully and understand all of them. 
-    Then you will be given a claim that may be supported by 1 or more documents. 
+    You will be given a list of documents. You need to read carefully and understand all of them.
+    Then you will be given a claim that may be supported by 1 or more documents.
     Your goal is to identify if the claim is supported and select the documentation IDs that provide evidence for the given claim.
 
 
@@ -17,7 +17,7 @@
     5. Else output the single document ID that support the claim, e.g., [2].
     6. Aim for the minimum set of IDs that fully supports the claim.
 
-    
+
 {% for shot in few_shots %}
 - name: few shots {{ loop.index }}
   role: user
@@ -34,7 +34,7 @@
     Evidence IDs: "{{ custom_tojson({"ids": shot.labels}) }}"
 
 {% endfor %}
-   
+
 - name: new input
   role: user
   content: |

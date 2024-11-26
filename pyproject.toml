@@ -27,7 +27,6 @@ pydantic = "^2.7"
 pydantic-settings = "^2.2.1"
 loguru = "^0.7.2"
 transformers = "^4.45.2"
-datasets = "^2.20.0"
 torch = "<2.4.0"
 lightning = "^2.1.2"
 numba = "^0.60.0"
@@ -43,6 +42,15 @@ pyahocorasick = "^2.1.0"
 seaborn = "^0.13.2"
 stackprinter = "^0.2.12"
 throughster = { git = 'git@github.com:MotzWanted/throughster.git', branch = 'dev'}
+
+[tool.poetrygroup.dataloader]
+optional = false
+
+[tool.poetry.group.dataloader.dependencies]
+datasets = "^2.20.0"
+polars = "^1.15.0"
+
+
 [tool.poetry.group.frontend]
 optional = true
 

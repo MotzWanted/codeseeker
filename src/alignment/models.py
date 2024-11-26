@@ -9,10 +9,10 @@ class Alignment(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
     indexes: list[list[int]] = pydantic.Field(
         ..., description="A list of indices of the segment elements that align with the query element."
-    )  # noqa: E501
+    )
     matrix: np.ndarray = pydantic.Field(
         ..., description="A sparse matrix of alignment scores between corpus and query elements."
-    )  # noqa: E501
+    )
     probabilities: np.ndarray | None = pydantic.Field(..., description="Token log probabilities.")
     extras: dict | None = pydantic.Field(default=None, description="Additional information.")
 

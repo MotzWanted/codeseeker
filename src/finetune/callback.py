@@ -47,11 +47,11 @@ class Callback:
 class PrintCallback(Callback):
     """A callback that prints the batches and outputs."""
 
-    def on_fit_start(self, *, step: int, model: transformers.PreTrainedModel) -> None:  # noqa: ARG002
+    def on_fit_start(self, *, step: int, model: transformers.PreTrainedModel) -> None:
         """Called at the beginning of the training loop."""
         rich.print(f"[bold yellow]on_fit_start[/bold yellow] (step={step}, rank={_get_node_rank()})")
 
-    def on_fit_end(self, *, step: int, status: str, model: transformers.PreTrainedModel) -> None:  # noqa: ARG002
+    def on_fit_end(self, *, step: int, status: str, model: transformers.PreTrainedModel) -> None:
         """Called at the end of the training loop."""
         rich.print(f"[bold yellow]on_fit_end[/bold yellow] (step={step}, status={status}, rank={_get_node_rank()})")
 
@@ -76,7 +76,7 @@ class PrintCallback(Callback):
         """Called at the beginning of the validation loop."""
         rich.print(f"[bold yellow]on_validation_start[/bold yellow] (step={step}, rank={_get_node_rank()})")
 
-    def on_validation_end(self, *, step: int, metrics: dict[str, typ.Any], model: transformers.PreTrainedModel) -> None:  # noqa: ARG002
+    def on_validation_end(self, *, step: int, metrics: dict[str, typ.Any], model: transformers.PreTrainedModel) -> None:
         """Called at the end of the validation loop."""
         rich.print(f"[bold yellow]on_validation_end[/bold yellow] (step={step}, rank={_get_node_rank()})")
         rich.print(metrics)

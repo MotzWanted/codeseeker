@@ -111,7 +111,7 @@ def run(args: Arguments):
     """Run the script."""
     loader = NbmeDatasetLoader()
     eval_data: datasets.Dataset = loader(split=args.split, size=args.size, num_proc=args.num_workers)  # type: ignore
-    segmenter: Segmenter = factory(args.segmenter, args.spacy_model)  # noqa: F821
+    segmenter: Segmenter = factory(args.segmenter, args.spacy_model)
     adapter = NbmeAdapter(segmenter=segmenter)
     eval_data = eval_data.map(
         adapter,

@@ -143,7 +143,7 @@ class Properties(pydantic.BaseModel):
 
     @pydantic.field_validator("py_type", mode="before")
     @classmethod
-    def _cast_py_type(cls: Type[Self], value: typ.Any) -> str:  # noqa: ANN401
+    def _cast_py_type(cls: Type[Self], value: typ.Any) -> str:
         if value is None:
             return "None"
         if isinstance(value, type):
@@ -153,7 +153,7 @@ class Properties(pydantic.BaseModel):
 
 
 @functools.singledispatch
-def infer_properties(x: typ.Any) -> Properties:  # noqa: ANN401
+def infer_properties(x: typ.Any) -> Properties:
     """Base function for inferring properties of an object."""
     return Properties(py_type=type(x))
 
@@ -316,7 +316,7 @@ def _format_device(device: str) -> str:
     return f"[{style}]{device}[/{style}]{idx}"
 
 
-def _default_formatter(x: typ.Any) -> str:  # noqa: ANN401
+def _default_formatter(x: typ.Any) -> str:
     """Default formatter."""
     x = str(x)
     if x.strip() == "-":
@@ -332,7 +332,7 @@ _FORMATTERS = {
 }
 
 
-def _format_field(field_name: str, field_value: typ.Any) -> str:  # noqa: ANN401
+def _format_field(field_name: str, field_value: typ.Any) -> str:
     """Apply a formatter to a field value based on its name."""
     formatter = _FORMATTERS.get(field_name, _default_formatter)
     return formatter(field_value)
@@ -340,7 +340,7 @@ def _format_field(field_name: str, field_value: typ.Any) -> str:  # noqa: ANN401
 
 def pprint_batch(
     batch: dict[str, typ.Any],
-    idx: None | list[int] = None,  # used here to enable compatibility with `datasets.map()`  # noqa: ARG001
+    idx: None | list[int] = None,  # used here to enable compatibility with `datasets.map()`
     console: None | rich.console.Console = None,
     header: None | str = None,
     footer: None | str = None,

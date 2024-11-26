@@ -144,9 +144,6 @@ class FuzzyMatcher(LexiconMatcher):
         corpus = self.clean_query_fn(corpus)
         queries = [self.clean_query_fn(query) for query in queries]
         matches = []
-        if self.lexicon:
-            query_expansion = [self.lookup_synonyms(query) for query in queries]
-
         matches.extend(self.fuzzy_similarity_matching(q, corpus) for q in queries)
         return matches
 

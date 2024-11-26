@@ -89,7 +89,7 @@ def run(args: Arguments):
     segmenters_ = [x for x in args.segmenter.split(":")] if ":" in args.segmenter else [args.segmenter]
     segmented_data = []
     for s in segmenters_:
-        segmenter: Segmenter = factory(s, args.spacy_model)  # noqa: F821
+        segmenter: Segmenter = factory(s, args.spacy_model)
         adapter = NbmeAdapter(segmenter=segmenter)
         temp_data = data.map(
             adapter,
