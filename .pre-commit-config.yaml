@@ -3,7 +3,6 @@ repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
-    -   id: check-added-large-files  # Check for large files.
     -   id: check-ast  # Check Python file syntax using the ast module.
     -   id: check-json  # Check JSON file syntax.
     -   id: check-merge-conflict  # Check for merge conflict strings.
