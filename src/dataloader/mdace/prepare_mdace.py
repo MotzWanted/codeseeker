@@ -45,13 +45,14 @@ import string
 from collections import defaultdict
 from pathlib import Path
 
-import click
 import polars as pl
 from dotenv import find_dotenv, load_dotenv
 
-from src.dataloader import mimic_utils
+from dataloader import mimic_utils
 
 random.seed(10)
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+OUTPUT_DIR = Path("data/mimic-iii/processed")
 
 
 def parse_code_dataframe(
@@ -83,7 +84,7 @@ def parse_code_dataframe(
     df = df.filter(df[code_column].is_not_null())
     df = df.unique(subset=[mimic_utils.ID_COLUMN, code_column])
     df = df.group_by([mimic_utils.ID_COLUMN, code_type_column]).agg(
-        pl.col(code_column).map_elements(list).alias(code_column)
+        pl.col(code_column).map_elements(list, return_dtype=pl.List(pl.Utf8)).alias(code_column)
     )
     return df
 
@@ -131,7 +132,7 @@ def get_mdace_annotations(path: Path) -> pl.DataFrame:
         "code": pl.Utf8,
         "spans": pl.List,
     }
-    return pl.DataFrame(schema=schema, data=rows)
+    return pl.DataFrame(schema=schema, data=rows, orient="row")
 
 
 def trim_annotations(
@@ -155,29 +156,25 @@ def clean_mdace_annotations(mdace_annotations: pl.DataFrame, mdace_notes: pl.Dat
     mdace_annotations = mdace_annotations.join(mdace_notes[["note_id", "text"]], on="note_id", how="inner")
     mdace_annotations = mdace_annotations.with_columns(
         spans=pl.struct("text", "spans").map_elements(
-            lambda row: [trim_annotations(span, row["text"]) for span in row["spans"]]
+            lambda row: [trim_annotations(span, row["text"]) for span in row["spans"]],
+            return_dtype=pl.List(pl.Struct([pl.Field("start", pl.Int64), pl.Field("end", pl.Int64)])),
         )
     )
 
     return mdace_annotations
 
 
-@click.command()
-@click.argument("input_filepath_str", type=click.Path(exists=True))
-@click.argument("output_filepath_str", type=click.Path())
-def main(input_filepath_str: str, output_filepath_str: str):
+def main():
     """Runs data processing scripts to turn raw data from (../raw) into
     cleaned data ready to be analyzed (saved in ../processed).
     """
 
     logger = logging.getLogger(__name__)
-    logger.info("making final data set from raw data")
-    input_filepath = Path(input_filepath_str)
-    output_filepath = Path(output_filepath_str)
-    output_filepath.mkdir(parents=True, exist_ok=True)
+    logger.info("Preparing the MDace dataset from raw data")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Load the dataframes
-    mimic_notes = pl.read_csv(input_filepath / "physionet.org/files/mimiciii/1.4/NOTEEVENTS.csv.gz")
+    mimic_notes = pl.read_csv(PROJECT_ROOT / "data/mimic-iii/raw/NOTEEVENTS.csv.gz")
     mimic_notes = mimic_notes.rename(
         {
             "HADM_ID": mimic_utils.ID_COLUMN,
@@ -189,8 +186,8 @@ def main(input_filepath_str: str, output_filepath_str: str):
         }
     )
 
-    mdace_inpatient_annotations = get_mdace_annotations(Path("data/raw/MDace/Inpatient"))
-    mdace_profee_annotations = get_mdace_annotations(Path("data/raw/MDace/Profee"))
+    mdace_inpatient_annotations = get_mdace_annotations(Path("data/mdace/raw/Inpatient"))
+    mdace_profee_annotations = get_mdace_annotations(Path("data/mdace/raw/Profee"))
     mdace_notes = mimic_notes.filter(pl.col("note_id").is_in(mdace_inpatient_annotations["note_id"]))
     mdace_inpatient_annotations = clean_mdace_annotations(mdace_inpatient_annotations, mdace_notes)
     mdace_profee_annotations = clean_mdace_annotations(mdace_profee_annotations, mdace_notes)
@@ -225,9 +222,10 @@ def main(input_filepath_str: str, output_filepath_str: str):
     )
 
     # save files to disk
-    mdace_notes.write_parquet(output_filepath / "mdace_notes.parquet")
-    mdace_inpatient_annotations.write_parquet(output_filepath / "mdace_inpatient_annotations.parquet")
-    mdace_profee_annotations.write_parquet(output_filepath / "mdace_profee_annotations.parquet")
+    logger.info(f"Saving the MDace dataset to {OUTPUT_DIR}")
+    mdace_notes.write_parquet(OUTPUT_DIR / "mdace_notes.parquet")
+    mdace_inpatient_annotations.write_parquet(OUTPUT_DIR / "mdace_inpatient_annotations.parquet")
+    mdace_profee_annotations.write_parquet(OUTPUT_DIR / "mdace_profee_annotations.parquet")
 
 
 if __name__ == "__main__":

@@ -42,13 +42,14 @@ import logging
 import random
 from pathlib import Path
 
-import click
 import polars as pl
 from dotenv import find_dotenv, load_dotenv
 
-from src.dataloader import mimic_utils
+from dataloader import mimic_utils
 
 random.seed(10)
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+OUTPUT_DIR = Path("data/mimic-iii/processed")
 
 
 def parse_code_dataframe(
@@ -80,7 +81,7 @@ def parse_code_dataframe(
     df = df.filter(df[code_column].is_not_null())
     df = df.unique(subset=[mimic_utils.ID_COLUMN, code_column])
     df = df.group_by([mimic_utils.ID_COLUMN, code_type_column]).agg(
-        pl.col(code_column).map_elements(list).alias(code_column)
+        pl.col(code_column).map_elements(list, return_dtype=pl.List(pl.Utf8)).alias(code_column)
     )
     return df
 
@@ -102,29 +103,32 @@ def parse_notes_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-@click.command()
-@click.argument("input_filepath_str", type=click.Path(exists=True))
-@click.argument("output_filepath_str", type=click.Path())
-def main(input_filepath_str: str, output_filepath_str: str):
+def main():
     """Runs data processing scripts to turn raw data from (../raw) into
     cleaned data ready to be analyzed (saved in ../processed).
     """
 
     logger = logging.getLogger(__name__)
-    logger.info("making final data set from raw data")
-    input_filepath = Path(input_filepath_str)
-    output_filepath = Path(output_filepath_str)
-    output_filepath.mkdir(parents=True, exist_ok=True)
+    logger.info("Preparing the MIMIC-III dataset from raw data")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Load the dataframes
-    mimic_notes = pl.read_csv(input_filepath / "physionet.org/files/mimiciii/1.4/NOTEEVENTS.csv.gz")
+    mimic_notes = pl.read_csv(PROJECT_ROOT / "data/mimic-iii/raw/NOTEEVENTS.csv.gz")
     mimic_diag = pl.read_csv(
-        input_filepath / "physionet.org/files/mimiciii/1.4/DIAGNOSES_ICD.csv.gz",
-        schema={"ICD9_CODE": str},
+        PROJECT_ROOT / "data/mimic-iii/raw/DIAGNOSES_ICD.csv.gz",
+        schema={
+            "HADM_ID": pl.Int64,
+            "ICD9_CODE": pl.String,
+        },
+        truncate_ragged_lines=True,
     )
     mimic_proc = pl.read_csv(
-        input_filepath / "physionet.org/files/mimiciii/1.4/PROCEDURES_ICD.csv.gz",
-        schema={"ICD9_CODE": str},
+        PROJECT_ROOT / "data/mimic-iii/raw/PROCEDURES_ICD.csv.gz",
+        schema={
+            "HADM_ID": pl.Int64,
+            "ICD9_CODE": pl.String,
+        },
+        truncate_ragged_lines=True,
     )
 
     # rename the columns
@@ -143,22 +147,25 @@ def main(input_filepath_str: str, output_filepath_str: str):
             "HADM_ID": mimic_utils.ID_COLUMN,
             "ICD9_CODE": "diagnosis_codes",
         }
-    ).drop(["SUBJECT_ID"])
+    )
     mimic_proc = mimic_proc.rename(
         {
             "HADM_ID": mimic_utils.ID_COLUMN,
             "ICD9_CODE": "procedure_codes",
         }
-    ).drop(["SUBJECT_ID"])
+    )
 
     # Format the code type columns
     mimic_diag = mimic_diag.with_columns(diagnosis_code_type=pl.lit("icd9cm"))
-
     mimic_proc = mimic_proc.with_columns(procedure_code_type=pl.lit("icd9pcs"))
 
     # Format the diagnosis codes by adding punctuations
-    mimic_diag = mimic_diag.with_columns(pl.col("diagnosis_codes").map_elements(mimic_utils.reformat_icd9cm_code))
-    mimic_proc = mimic_proc.with_columns(pl.col("procedure_codes").map_elements(mimic_utils.reformat_icd9pcs_code))
+    mimic_diag = mimic_diag.with_columns(
+        pl.col("diagnosis_codes").map_elements(mimic_utils.reformat_icd9cm_code, return_dtype=pl.Utf8)
+    )
+    mimic_proc = mimic_proc.with_columns(
+        pl.col("procedure_codes").map_elements(mimic_utils.reformat_icd9pcs_code, return_dtype=pl.Utf8)
+    )
 
     # Process codes and notes
     mimic_diag = parse_code_dataframe(
@@ -173,11 +180,12 @@ def main(input_filepath_str: str, output_filepath_str: str):
         code_type_column="procedure_code_type",
     )
     mimic_notes = parse_notes_dataframe(mimic_notes)
-    mimic_codes = mimic_diag.join(mimic_proc, on=mimic_utils.ID_COLUMN, how="outer_coalesce")
+    mimic_codes = mimic_diag.join(mimic_proc, on=mimic_utils.ID_COLUMN, how="full", coalesce=True)
     mimiciii = mimic_notes.join(mimic_codes, on=mimic_utils.ID_COLUMN, how="inner")
 
     # save files to disk
-    mimiciii.write_parquet(output_filepath / "mimiciii.parquet")
+    logger.info(f"Saving the MIMIC-III dataset to {OUTPUT_DIR}")
+    mimiciii.write_parquet(OUTPUT_DIR / "mimiciii.parquet")
 
 
 if __name__ == "__main__":

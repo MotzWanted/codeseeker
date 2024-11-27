@@ -22,7 +22,7 @@ from pathlib import Path
 import polars as pl
 from dotenv import find_dotenv, load_dotenv
 
-from src.dataloader import mimic_utils
+from dataloader import mimic_utils
 
 random.seed(10)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -58,7 +58,7 @@ def parse_code_dataframe(
     df = df.filter(df[code_column].is_not_null())
     df = df.unique(subset=[mimic_utils.ID_COLUMN, code_column])
     df = df.group_by([mimic_utils.ID_COLUMN, code_type_column]).agg(
-        pl.col(code_column).map_elements(list).alias(code_column)
+        pl.col(code_column).map_elements(list, return_dtype=pl.List(pl.Utf8)).alias(code_column)
     )
     return df
 
@@ -76,18 +76,30 @@ def main():
     """
 
     logger = logging.getLogger(__name__)
-    logger.info("making final data set from raw data")
+    logger.info("Preparing the MIMIC-IV dataset from raw data")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Load the dataframes
     mimic_notes = pl.read_csv(PROJECT_ROOT / "data/mimic-iv-note/raw/discharge.csv.gz")
     mimic_diag = pl.read_csv(
-        PROJECT_ROOT / "data/mimic-iv/diagnoses_icd.csv.gz",
-        schema={"icd_code": str},
+        PROJECT_ROOT / "data/mimic-iv/raw/diagnoses_icd.csv.gz",
+        schema={
+            "hadm_id": pl.Int64,
+            "subject_id": pl.Int64,
+            "icd_code": pl.String,
+            "icd_version": pl.String,
+        },
+        truncate_ragged_lines=True,
     )
     mimic_proc = pl.read_csv(
-        PROJECT_ROOT / "data/mimic-iv/procedures_icd.csv.gz",
-        schema={"icd_code": str},
+        PROJECT_ROOT / "data/mimic-iv/raw/procedures_icd.csv.gz",
+        schema={
+            "hadm_id": pl.Int64,
+            "subject_id": pl.Int64,
+            "icd_code": pl.String,
+            "icd_version": pl.String,
+        },
+        truncate_ragged_lines=True,
     )
 
     # rename the columns
@@ -125,8 +137,8 @@ def main():
     # Format the diagnosis codes by adding punctuation points
     formatted_codes = (
         pl.when(mimic_diag["diagnosis_code_type"] == "icd10cm")
-        .then(mimic_diag["diagnosis_codes"].map_elements(mimic_utils.reformat_icd10cm_code))
-        .otherwise(mimic_diag["diagnosis_codes"].map_elements(mimic_utils.reformat_icd9cm_code))
+        .then(mimic_diag["diagnosis_codes"].map_elements(mimic_utils.reformat_icd10cm_code, return_dtype=pl.Utf8))
+        .otherwise(mimic_diag["diagnosis_codes"].map_elements(mimic_utils.reformat_icd9cm_code, return_dtype=pl.Utf8))
     )
     mimic_diag = mimic_diag.with_columns(formatted_codes)
 
@@ -134,7 +146,7 @@ def main():
     formatted_codes = (
         pl.when(mimic_proc["procedure_code_type"] == "icd10pcs")
         .then(mimic_proc["procedure_codes"])
-        .otherwise(mimic_proc["procedure_codes"].map_elements(mimic_utils.reformat_icd9pcs_code))
+        .otherwise(mimic_proc["procedure_codes"].map_elements(mimic_utils.reformat_icd9pcs_code, return_dtype=pl.Utf8))
     )
     mimic_proc = mimic_proc.with_columns(formatted_codes)
 
@@ -151,11 +163,12 @@ def main():
     )
 
     mimic_notes = parse_notes_dataframe(mimic_notes)
-    mimic_codes = mimic_diag.join(mimic_proc, on=mimic_utils.ID_COLUMN, how="outer_coalesce")
+    mimic_codes = mimic_diag.join(mimic_proc, on=mimic_utils.ID_COLUMN, how="full", coalesce=True)
     mimiciv = mimic_notes.join(mimic_codes, on=mimic_utils.ID_COLUMN, how="inner")
     mimiciv = mimiciv.with_columns(mimiciv["note_type"].str.replace("DS", "discharge_summary"))
 
     # save files to disk
+    logger.info(f"Saving the MIMIC-IV dataset to {OUTPUT_DIR}")
     mimiciv.write_parquet(OUTPUT_DIR / "mimiciv.parquet")
 
 
