@@ -7,6 +7,8 @@ from typing import Literal
 
 ID_COLUMN = "_id"
 TEXT_COLUMN = "text"
+TEXT_ADMISSION_COLUMN = "text_admission"
+TEXT_DISCHARGE_COLUMN = "text_discharge"
 TARGET_COLUMN = "target"
 SUBJECT_ID_COLUMN = "subject_id"
 SOS = "<sos>"

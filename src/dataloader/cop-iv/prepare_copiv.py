@@ -62,10 +62,10 @@ def parse_code_dataframe(
     return df
 
 
-def parse_notes_dataframe(df: pl.DataFrame) -> pl.DataFrame:
+def parse_notes_dataframe(df: pl.DataFrame, text_col: str) -> pl.DataFrame:
     """Parse the notes dataframe by filtering out notes with no text and removing duplicates."""
-    df = df.filter(df[mimic_utils.TEXT_COLUMN].is_not_null())
-    df = df.unique(subset=[mimic_utils.ID_COLUMN, mimic_utils.TEXT_COLUMN])
+    df = df.filter(df[text_col].is_not_null())
+    df = df.unique(subset=[mimic_utils.ID_COLUMN, text_col])
     return df
 
 
@@ -106,11 +106,18 @@ def main():
     )
 
     # rename the columns
+    mimic_admissions = mimic_admissions.rename(
+        {
+            "hadm_id": mimic_utils.ID_COLUMN,
+            "subject_id": mimic_utils.SUBJECT_ID_COLUMN,
+            "text": mimic_utils.TEXT_ADMISSION_COLUMN,
+        }
+    )
     mimic_notes = mimic_notes.rename(
         {
             "hadm_id": mimic_utils.ID_COLUMN,
             "subject_id": mimic_utils.SUBJECT_ID_COLUMN,
-            "text": mimic_utils.TEXT_COLUMN,
+            "text": mimic_utils.TEXT_DISCHARGE_COLUMN,
         }
     )
     mimic_diag = mimic_diag.rename(
@@ -171,20 +178,15 @@ def main():
     mimic_codes = mimic_diag.join(mimic_proc, on=mimic_utils.ID_COLUMN, how="full", coalesce=True)
 
     mimic_admissions = mimic_admissions.with_columns(
-        mimic_admissions["los_days"].map(mimic_utils.map_los_to_class).alias("los_categorical")
-    )
-    mimic_admissions = mimic_admissions.with_columns(
-        mimic_admissions["hospital_expire_flag"].cast(pl.Int8).alias("mortality")
-    )
-    mimic_admissions = mimic_admissions.with_columns(
         mimic_admissions["careunit"].map(mimic_utils.map_careunit).alias("careunit")
     )
 
     # save files to disk
     logger.info(f"Saving the COP-IV dataset to {OUTPUT_DIR}")
-    mimic_notes = parse_notes_dataframe(mimic_notes)
-    copiv = mimic_notes.join(mimic_codes, on=mimic_utils.ID_COLUMN, how="inner")
-    copiv = copiv.join(mimic_admissions[["hadm_id", "los_categorical", "mortality", "careunit"]], on="hadm_id", how="inner")
+    mimic_notes = parse_notes_dataframe(mimic_notes, text_col=mimic_utils.TEXT_DISCHARGE_COLUMN)
+    mimic_admissions = parse_notes_dataframe(mimic_admissions, text_col=mimic_utils.TEXT_ADMISSION_COLUMN)
+    copiv = mimic_admissions.join(mimic_notes, on=mimic_utils.ID_COLUMN, how="inner", coalesce=True)
+    copiv = copiv.join(mimic_codes, on=mimic_utils.ID_COLUMN, how="inner", coalesce=True)
     copiv = copiv.with_columns(copiv["note_type"].str.replace("DS", "discharge_summary"))
     copiv.write_parquet(OUTPUT_DIR / "copiv.parquet")
 
