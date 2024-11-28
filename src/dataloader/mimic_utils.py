@@ -3,6 +3,7 @@
 import numpy as np
 import polars as pl
 from datasets import DatasetDict
+from typing import Literal
 
 ID_COLUMN = "_id"
 TEXT_COLUMN = "text"
@@ -342,3 +343,55 @@ def filter_unknown_targets(example: dict, known_targets: set[str]) -> dict:
                 example["procedure_code_spans"] = None
 
     return example
+
+
+def map_careunit(careunit: str) -> str:
+    """
+    Map raw care units to broader categories.
+
+    Args:
+        careunit (str): Raw care unit.
+
+    Returns:
+        str: Mapped care unit category.
+    """
+    surgery = ['Med/Surg', 'Surgery', 'Medical/Surgical (Gynecology)', 'PACU']
+    cardiology = ['Cardiology', 'Medicine/Cardiology']
+    neurology = ['Neurology', 'Neuro Intermediate']
+    obstetrics = ['Labor & Delivery', 'Obstetrics Postpartum']
+    oncology = ['Hematology/Oncology']
+    observation = ['Observation']
+
+    if careunit in surgery:
+        return "surgery"
+    elif careunit in cardiology:
+        return "cardiology"
+    elif careunit in neurology:
+        return "neurology"
+    elif careunit in obstetrics:
+        return "obstetrics"
+    elif careunit in oncology:
+        return "oncology"
+    elif careunit in observation:
+        return "observation"
+    else:
+        return "other"
+    
+def map_los_to_class(los_days: float) -> int:
+    """
+    Map length of stay (LOS) to predefined categories.
+
+    Args:
+        los_days (float): Length of stay in days.
+
+    Returns:
+        int: LOS category (0 for <= 3 days, 1 for 3-7 days, etc.).
+    """
+    if los_days <= 3:
+        return 0
+    elif 3 < los_days <= 7:
+        return 1
+    elif 7 < los_days <= 14:
+        return 2
+    else:
+        return 3
