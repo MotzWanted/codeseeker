@@ -6,6 +6,7 @@
 help:  ## Display this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
+
 .PHONY: download-data
 download-data :
 	wget -nd -r -N -c -np --user $(PHYSIONET_USER) --password $(PHYSIONET_PASS) https://physionet.org/files/snomed-ct-entity-challenge/1.0.0/ -P data/snomed/raw || true
@@ -13,6 +14,7 @@ download-data :
 	wget -nd -r -N -c -np --user $(PHYSIONET_USER) --password $(PHYSIONET_PASS) https://physionet.org/files/mimic-iv-note/2.2/ -P data/mimic-iv-note/raw || true
 	wget -nd -r -N -c -np --user $(PHYSIONET_USER) --password $(PHYSIONET_PASS) https://physionet.org/files/mimiciii/1.4/ -P data/mimic-iii/raw || true
 	wget -nd -r -N -c -np --user $(PHYSIONET_USER) --password $(PHYSIONET_PASS) https://physionet.org/files/meddec/1.0.0/ -P data/meddec/raw || true
+	wget -nd -r -N -c -np --user $(PHYSIONET_USER) --password $(PHYSIONET_PASS) https://physionet.org/files/phenotype-annotations-mimic/1.20.03/ -P data/meddec/raw || true
 
 .PHONY: prepare-data
 prepare-data:

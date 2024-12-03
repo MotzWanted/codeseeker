@@ -46,13 +46,12 @@ from collections import defaultdict
 from pathlib import Path
 
 import polars as pl
-from dotenv import find_dotenv, load_dotenv
 
 from dataloader import mimic_utils
 
 random.seed(10)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-OUTPUT_DIR = Path("data/mimic-iii/processed")
+OUTPUT_DIR = Path("data/mdace/processed")
 
 
 def parse_code_dataframe(
@@ -179,7 +178,7 @@ def main():
         {
             "HADM_ID": mimic_utils.ID_COLUMN,
             "SUBJECT_ID": mimic_utils.SUBJECT_ID_COLUMN,
-            "ROW_ID": "note_id",
+            "ROW_ID": mimic_utils.ROW_ID_COLUMN,
             "TEXT": mimic_utils.TEXT_COLUMN,
             "CATEGORY": "note_type",
             "DESCRIPTION": "note_subtype",
@@ -231,12 +230,5 @@ def main():
 if __name__ == "__main__":
     log_fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     logging.basicConfig(level=logging.INFO, format=log_fmt)
-
-    # not used in this stub but often useful for finding various files
-    project_dir = Path(__file__).resolve().parents[2]
-
-    # find .env automagically by walking up directories until it's found, then
-    # load up the .env entries as environment variables
-    load_dotenv(find_dotenv())
 
     main()

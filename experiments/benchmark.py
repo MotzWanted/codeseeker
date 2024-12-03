@@ -14,7 +14,7 @@ import rich
 from alignment.aligners.llm import create_llm_aligner
 from alignment.metrics import AlignmentMetrics
 from alignment.ops import HfAlignment
-from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
+from dataloader.nbme.nbme_notes import NbmeDatasetLoader
 from dataloader.adapters.alignment import NbmeAdapter
 from throughster.factory import create_interface
 from segmenters import factory, Segmenter

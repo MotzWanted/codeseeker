@@ -4,6 +4,7 @@ import numpy as np
 import polars as pl
 from datasets import DatasetDict
 
+ROW_ID_COLUMN = "note_id"
 ID_COLUMN = "_id"
 TEXT_COLUMN = "text"
 TARGET_COLUMN = "target"
