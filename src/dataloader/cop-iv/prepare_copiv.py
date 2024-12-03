@@ -8,10 +8,8 @@ The script does the following:
 3. Adds punctuations to the ICD-9-CM. ICD-9-PCS, and ICD-10-CM codes (not needed for ICD-10-PCS codes).
 4. Removes duplicate rows.
 5. Removes cases with no codes.
-6. Extracts the COP-IV tasks; Categorical LoS, mortality, careunit, and diagnoses/procedure.
+6. Extracts the multiclass COP-IV tasks; Categorical careunit routing, diagnoses, and procedures.
 7. Saves the data as parquet files.
-
-
 """
 
 import logging
@@ -19,7 +17,6 @@ import random
 from pathlib import Path
 
 import polars as pl
-from dotenv import find_dotenv, load_dotenv
 
 from dataloader import mimic_utils
 
@@ -100,24 +97,20 @@ def main():
         },
         truncate_ragged_lines=True,
     )
-    mimic_admissions = pl.read_csv(PROJECT_ROOT / "data/mimic-iv/raw/admissions.csv.gz")
-    mimic_admissions = mimic_admissions.filter(
-        mimic_admissions["los_days"].is_not_null() & mimic_admissions["hospital_expire_flag"].is_not_null()
-    )
+    mimic_transfers = pl.read_csv(PROJECT_ROOT / "data/mimic-iv/raw/transfers.csv.gz")
 
     # rename the columns
-    mimic_admissions = mimic_admissions.rename(
+    mimic_transfers = mimic_transfers.rename(
         {
             "hadm_id": mimic_utils.ID_COLUMN,
             "subject_id": mimic_utils.SUBJECT_ID_COLUMN,
-            "text": mimic_utils.TEXT_ADMISSION_COLUMN,
         }
     )
     mimic_notes = mimic_notes.rename(
         {
             "hadm_id": mimic_utils.ID_COLUMN,
             "subject_id": mimic_utils.SUBJECT_ID_COLUMN,
-            "text": mimic_utils.TEXT_DISCHARGE_COLUMN,
+            "text": mimic_utils.TEXT_COLUMN,
         }
     )
     mimic_diag = mimic_diag.rename(
@@ -144,21 +137,9 @@ def main():
     mimic_proc = mimic_proc.with_columns(mimic_proc["procedure_code_type"].str.replace("10", "icd10pcs"))
     mimic_proc = mimic_proc.with_columns(mimic_proc["procedure_code_type"].str.replace("9", "icd9pcs"))
 
-    # Format the diagnosis codes by adding punctuation points
-    formatted_codes = (
-        pl.when(mimic_diag["diagnosis_code_type"] == "icd10cm")
-        .then(mimic_diag["diagnosis_codes"].map_elements(mimic_utils.reformat_icd10cm_code, return_dtype=pl.Utf8))
-        .otherwise(mimic_diag["diagnosis_codes"].map_elements(mimic_utils.reformat_icd9cm_code, return_dtype=pl.Utf8))
-    )
-    mimic_diag = mimic_diag.with_columns(formatted_codes)
-
-    # Format the procedure codes by adding punctuation points
-    formatted_codes = (
-        pl.when(mimic_proc["procedure_code_type"] == "icd10pcs")
-        .then(mimic_proc["procedure_codes"])
-        .otherwise(mimic_proc["procedure_codes"].map_elements(mimic_utils.reformat_icd9pcs_code, return_dtype=pl.Utf8))
-    )
-    mimic_proc = mimic_proc.with_columns(formatted_codes)
+    # NOTE: Normally we would add punctuations to the ICD-9-CM, ICD-9-PCS, and ICD-10-CM codes here.
+    # However, since we are truncating the codes to the first 3 or 4 characters, adding punctuation
+    # would cause problems.
 
     # Process codes and notes
     mimic_diag = parse_code_dataframe(
@@ -172,20 +153,23 @@ def main():
         code_type_column="procedure_code_type",
     )
 
-    # Include the COP-IV tasks; Categorical LoS, mortality, careunit, and diagnoses/procedure
+    # Include the COP-IV tasks; careunit, and diagnoses/procedure
     mimic_diag = mimic_diag.with_columns(pl.col("diagnosis_codes").str.slice(3).alias("diagnosis"))
     mimic_proc = mimic_proc.with_columns(pl.col("procedure_codes").str.slice(4).alias("procedure"))
     mimic_codes = mimic_diag.join(mimic_proc, on=mimic_utils.ID_COLUMN, how="full", coalesce=True)
 
-    mimic_admissions = mimic_admissions.with_columns(
-        mimic_admissions["careunit"].map(mimic_utils.map_careunit).alias("careunit")
+    # Get where eventtype is transfer
+    mimic_transfers = mimic_transfers.filter(pl.col("eventtype") == "transfer")
+    mimic_transfers = mimic_transfers.filter(pl.col("careunit") != "Unknown")
+    mimic_transfers = mimic_transfers.with_columns(
+        mimic_transfers["careunit"].map_elements(mimic_utils.map_careunit).alias("careunit")
     )
 
     # save files to disk
     logger.info(f"Saving the COP-IV dataset to {OUTPUT_DIR}")
-    mimic_notes = parse_notes_dataframe(mimic_notes, text_col=mimic_utils.TEXT_DISCHARGE_COLUMN)
-    mimic_admissions = parse_notes_dataframe(mimic_admissions, text_col=mimic_utils.TEXT_ADMISSION_COLUMN)
-    copiv = mimic_admissions.join(mimic_notes, on=mimic_utils.ID_COLUMN, how="inner", coalesce=True)
+    mimic_notes = parse_notes_dataframe(mimic_notes, text_col=mimic_utils.TEXT_COLUMN)
+    mimic_notes = mimic_utils.filter_admission_text(mimic_notes)
+    copiv = mimic_notes.join(mimic_transfers, on=mimic_utils.ID_COLUMN, how="inner", coalesce=True)
     copiv = copiv.join(mimic_codes, on=mimic_utils.ID_COLUMN, how="inner", coalesce=True)
     copiv = copiv.with_columns(copiv["note_type"].str.replace("DS", "discharge_summary"))
     copiv.write_parquet(OUTPUT_DIR / "copiv.parquet")
@@ -194,12 +178,5 @@ def main():
 if __name__ == "__main__":
     log_fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     logging.basicConfig(level=logging.INFO, format=log_fmt)
-
-    # not used in this stub but often useful for finding various files
-    project_dir = Path(__file__).resolve().parents[2]
-
-    # find .env automagically by walking up directories until it's found, then
-    # load up the .env entries as environment variables
-    load_dotenv(find_dotenv())
 
     main()
