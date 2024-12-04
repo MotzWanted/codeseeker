@@ -206,7 +206,8 @@ class XMLTrie(Trie):
         trie.roots.append(code_root.id)
         trie.all[code_root.id] = code_root
         trie.lookup[code_root.code] = code_root.id
-        for table_index, pcs_table in track(enumerate(root.findall("pcsTable")), description="Parsing PCS tables"):
+        pcs_tables = root.findall("pcsTable")
+        for table_index, pcs_table in track(enumerate(pcs_tables), description="Parsing PCS tables", total=len(pcs_tables)):
             table_id = f"{root_node_id}_Table_{table_index + 1}"
             num_rows = len(pcs_table.findall("pcsRow"))
             table_node = Category(
