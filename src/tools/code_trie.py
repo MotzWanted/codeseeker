@@ -2,8 +2,10 @@ import csv
 from dataclasses import dataclass
 
 from dataclasses import dataclass, field
+from random import shuffle
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional
+import polars as pl
 from rich.progress import track
 
 
@@ -294,7 +296,7 @@ class XMLTrie(Trie):
         variable_axes = []
 
         for axis in sorted(pcs_row.findall("axis"), key=lambda x: int(x.get("pos", 0))):
-            axis_codes = [(label.attrib["code"], label.text, axis.find("title").text) for label in axis.findall("label")]
+            axis_codes = [(label.attrib["code"], label.text, axis.findtext("title")) for label in axis.findall("label")]
             variable_axes.append(axis_codes)
 
         nodes = []
@@ -321,6 +323,42 @@ class XMLTrie(Trie):
                         trie.insert(new_node, root_char=parent_code)
                         new_nodes.append(new_node)
                 nodes = new_nodes
+
+
+def get_hard_negatives_for_code(code: str, trie: Trie, num: int) -> List[str]:
+    """Gets a number of hard negatives for a given code by going one level up in the trie
+    and selecting the first n leaves that are not the given code."""
+    node = trie.all[code]
+    children_for_parent = []
+    if node.parent_id:
+        parent = trie.all[node.parent_id]
+        children_for_parent = trie.get_all_children(parent.id)
+    children_for_node = trie.get_all_children(node.id)
+    hard_negatives = []
+    seen_codes = set([code])
+    for node in children_for_node + children_for_parent:
+        if node.code not in seen_codes:
+            hard_negatives.append(node.code)
+            seen_codes.add(node.code)
+    shuffle(hard_negatives)
+    return hard_negatives[:num]
+
+
+def get_hard_negatives_for_list_of_codes(
+    codes: list[str], trie: XMLTrie, num: int
+) -> List[str]:
+    hard_negatives = []
+    for code in codes:
+        hard_negatives.extend(get_hard_negatives_for_code(code, trie, num=num))
+    return hard_negatives
+
+def add_hard_negatives_to_set(data: pl.DataFrame, trie: Trie, source_col: str, dest_col: str, num: int) -> pl.DataFrame:
+    data = data.with_columns(
+        pl.col(source_col).map_elements(
+            lambda codes: get_hard_negatives_for_list_of_codes(codes, trie, num=num)
+        ).alias(dest_col)
+    )
+    return data
 
 
 if __name__ == "__main__":
