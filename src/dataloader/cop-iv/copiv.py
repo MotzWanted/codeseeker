@@ -1,12 +1,10 @@
-"""COP-IV-ICD9: A medical coding dataset extracted from COP-IV with ICD-9 diagnosis and procedure codes."""
+"""COP-IV: A medical coding dataset extracted from MIMIC-IV; 3 different multiclass tasks supported.."""
 
 from pathlib import Path
 import typing as typ
 
 import datasets
 import polars as pl
-
-from dataloader.mimic_utils import remove_rare_codes
 
 logger = datasets.logging.get_logger(__name__)
 
@@ -24,36 +22,36 @@ _CITATION = """
 """
 
 _DESCRIPTION = """
-COP-IV-ICD9: A clinical outcome prediction dataset supporting 3 tasks; patient routing, diagnoses, 
-and procedure prediction. Diagnoses and procedures are derived from the relevant ICD-9 codes.
+COP-IV: A clinical outcome prediction dataset supporting 3 tasks; patient routing, diagnoses, 
+and procedure prediction. Diagnoses and procedures are derived from the relevant ICD-10 codes.
 The base dataset is MIMIC-IV.
 """
 
 _PROJECT_ROOT = Path(__file__).parent.parent
 _DATASET_PATH = _PROJECT_ROOT / "data/processed/copiv.parquet"
-_SPLITS_PATH = _PROJECT_ROOT / "data/splits/copiv_icd9_split.feather"
+_SPLITS_PATH = _PROJECT_ROOT / "data/splits/copiv_split.feather"
 
 
-class COP_IV_ICD9_Config(datasets.BuilderConfig):
-    """BuilderConfig for COP-IV-ICD9."""
+class COP_IV_Config(datasets.BuilderConfig):
+    """BuilderConfig for COPIV."""
 
     def __init__(self, **kwargs: typ.Any):
-        """BuilderConfig for COP-IV-ICD9.
+        """BuilderConfig for COPIV.
 
         Args:
           **kwargs: keyword arguments forwarded to super.
         """
-        super(COP_IV_ICD9_Config, self).__init__(**kwargs)
+        super(COP_IV_Config, self).__init__(**kwargs)
 
 
-class COP_IV_ICD9(datasets.GeneratorBasedBuilder):
-    """COP-IV-ICD9: A medical coding dataset with ICD-9 diagnosis and procedure codes."""
+class COPIV(datasets.GeneratorBasedBuilder):
+    """COP-IV: A clinical decision dataset derived from MIMIC-IV."""
 
     BUILDER_CONFIGS = [
-        COP_IV_ICD9_Config(
-            name="copiv-icd9",
+        COP_IV_Config(
+            name="cop-iv",
             version=datasets.Version("1.0.0", ""),
-            description="Processed COP-IV dataset with ICD-9 codes.",
+            description="Processed COP-IV dataset with 3 tasks; patient routing, diagnoses, and procedure prediction.",
         ),
     ]
 
@@ -83,6 +81,9 @@ class COP_IV_ICD9(datasets.GeneratorBasedBuilder):
         raw_data = pl.read_parquet(data_path)
         data = raw_data.join(splits, on="_id")
 
+        # remove not used columns
+        data = data.drop(["note_seq", "charttime", "storetime"])
+
         # only keep ICD-10 codes
         data = data.filter((pl.col("diagnosis_code_type") == "icd10cm") | (pl.col("procedure_code_type") == "icd10pcs"))
 
@@ -91,16 +92,6 @@ class COP_IV_ICD9(datasets.GeneratorBasedBuilder):
 
         # filter out rows with no codes
         data = data.filter(pl.col("diagnosis").is_not_null() | pl.col("procedure").is_not_null())
-
-        # remove not used columns
-        data = data.drop(
-            [
-                "note_seq", "charttime", "storetime", "diagnosis_code_type", "procedure_code_type", 
-                "diagnoses_codes", "procedure_codes", "chief_complaint", "present_illness",
-                "medical_history", "medication_adm", "allergies", "physical_exam", "family_history",
-                "social_history",
-            ]
-        )
 
         return [
             datasets.SplitGenerator(
