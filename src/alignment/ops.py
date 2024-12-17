@@ -54,7 +54,7 @@ class HfAlignment(HfOperation):
 
     def _validate_input(self, batch: dict[str, list[typ.Any]]) -> None:
         """Validate the input batch."""
-        for key in ["entities", "segments"]:
+        for key in ["classes", "segments"]:
             if key not in batch:
                 raise ValueError(f"Missing key: {key}. Available keys: {batch.keys()}")
             if key and not isinstance(batch[key], list):

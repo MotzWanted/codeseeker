@@ -1,4 +1,4 @@
 import pathlib
-from dataloader.mdace import mdace_inpatient
+from dataloader.mdace import generator
 
-MDACE_INPATIENT_PATH = str(pathlib.Path(mdace_inpatient.__file__))
+MDACE_INPATIENT_PATH = str(pathlib.Path(generator.__file__))

@@ -5,7 +5,7 @@ import polars as pl
 from datasets import DatasetDict
 
 ROW_ID_COLUMN = "note_id"
-ID_COLUMN = "_id"
+ID_COLUMN = "hadm_id"
 TEXT_COLUMN = "text"
 TARGET_COLUMN = "target"
 SUBJECT_ID_COLUMN = "subject_id"
@@ -84,13 +84,13 @@ def remove_rare_codes(df: pl.DataFrame, code_columns: list[str], min_count: int)
         pl.DataFrame: dataframe with codes that appear more than min_count times
     """
     for code_column in code_columns:
-        code_exploded = df[["_id", code_column]].explode(code_column)
+        code_exploded = df[[ID_COLUMN, code_column]].explode(code_column)
         code_counts = code_exploded[code_column].value_counts()
         codes_to_include = set(code_counts.filter(code_counts["count"] >= min_count)[code_column])
         code_exploded_filtered = code_exploded.filter(pl.col(code_column).is_in(codes_to_include))
-        code_filtered = code_exploded_filtered.group_by("_id").agg(pl.col(code_column))
+        code_filtered = code_exploded_filtered.group_by(ID_COLUMN).agg(pl.col(code_column))
         df = df.drop(code_column)
-        df = df.join(code_filtered, on="_id", how="left")
+        df = df.join(code_filtered, on=ID_COLUMN, how="left")
     return df
 
 
@@ -109,7 +109,7 @@ def keep_top_k_codes(df: pl.DataFrame, code_columns: list[str], k: int) -> pl.Da
 
     # Iterate over each code column to get the counts
     for code_column in code_columns:
-        code_exploded = df[["_id", code_column]].explode(code_column)
+        code_exploded = df[[ID_COLUMN, code_column]].explode(code_column)
         if code_counts is None:
             code_counts = code_exploded[code_column].value_counts().rename({code_column: "codes"})
         else:
@@ -127,11 +127,11 @@ def keep_top_k_codes(df: pl.DataFrame, code_columns: list[str], k: int) -> pl.Da
 
     # Filter the original DataFrame to keep only the top k codes
     for code_column in code_columns:
-        code_exploded = df[["_id", code_column]].explode(code_column)
+        code_exploded = df[[ID_COLUMN, code_column]].explode(code_column)
         code_exploded_filtered = code_exploded.filter(pl.col(code_column).is_in(codes_to_include))
-        code_filtered = code_exploded_filtered.group_by("_id").agg(pl.col(code_column))
+        code_filtered = code_exploded_filtered.group_by(ID_COLUMN).agg(pl.col(code_column))
         df = df.drop(code_column)
-        df = df.join(code_filtered, on="_id", how="left")
+        df = df.join(code_filtered, on=ID_COLUMN, how="left")
 
     return df
 

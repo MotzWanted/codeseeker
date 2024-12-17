@@ -7,6 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 import rich
 
 from dataloader import meddec, snomed, mdace_inpatient
+import dataloader
+from dataloader.base import DatasetConfig
+from segmenters.base import factory
 
 
 def my_loader(
@@ -25,32 +28,41 @@ def my_loader(
     )
 
 
+SEGMENTER = factory("spacy", spacy_model="en_core_web_lg")
+
 DATASET_CONFIGS = {
-    "meddec": {"path": meddec, "split": "train", "trust_remote_code": True},
-    "snomed": {"path": snomed, "split": "train", "trust_remote_code": True},
-    "mdace-icd9-diagnosis": {
-        "path": mdace_inpatient,
-        "name": "icd9-diagnosis",
-        "split": "test",
-        "trust_remote_code": True,
+    "meddec": {
+        "identifier": "meddec",
+        "name_or_path": meddec,
+        "split": "train",
+        "options": {"segmenter": SEGMENTER},
     },
-    "mdace-icd9-procedure": {
-        "path": mdace_inpatient,
-        "name": "icd9-procedure",
-        "split": "test",
-        "trust_remote_code": True,
+    "snomed": {
+        "identifier": "snomed",
+        "name_or_path": snomed,
+        "split": "train",
+        "options": {"segmenter": SEGMENTER},
     },
-    "mdace-icd10-diagnosis": {
-        "path": mdace_inpatient,
-        "name": "icd10-diagnosis",
+    "mdace-diagnosis-3": {
+        "identifier": "mdace-diagnosis-3",
+        "name_or_path": mdace_inpatient,
+        "subsets": ["icd10cm-3"],
         "split": "test",
-        "trust_remote_code": True,
+        "options": {"segmenter": SEGMENTER},
     },
-    "mdace-icd10-procedure": {
-        "path": mdace_inpatient,
-        "name": "icd10-procedure",
+    "mdace-procedure-4": {
+        "identifier": "mdace-procedure-4",
+        "name_or_path": mdace_inpatient,
+        "subsets": ["icd10pcs-4"],
         "split": "test",
-        "trust_remote_code": True,
+        "options": {"segmenter": SEGMENTER},
+    },
+    "mdace-icd10-3": {
+        "identifier": "mdace-icd10",
+        "name_or_path": mdace_inpatient,
+        "subsets": ["icd10-diagnosis", "icd10-procedure"],
+        "split": "test",
+        "options": {"segmenter": SEGMENTER},
     },
     "my_data": {
         "identifier": "my_data",
@@ -62,7 +74,7 @@ DATASET_CONFIGS = {
 class Arguments(BaseSettings):
     """Arguments for the script."""
 
-    name: str = "mdace-icd10-diagnosis"
+    name: str = "mdace-diagnosis"
 
     model_config = SettingsConfigDict(cli_parse_args=True, frozen=True)
 
@@ -70,11 +82,11 @@ class Arguments(BaseSettings):
 def run(args: Arguments) -> None:
     """Showcase the `load_dataset` function."""
     try:
-        config = DATASET_CONFIGS[args.name]
+        config = DatasetConfig(**DATASET_CONFIGS[args.name])
     except KeyError as exc:
         raise KeyError(f"Configuration for `{args.name}` not found!") from exc
 
-    dset = datasets.load_dataset(**config)
+    dset = dataloader.load_dataset(config)
     rich.print(dset)
 
 

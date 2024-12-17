@@ -1,7 +1,7 @@
 import csv
 from dataclasses import dataclass
 
-from dataclasses import dataclass, field
+from dataclasses import field
 from random import shuffle
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional
@@ -40,7 +40,7 @@ class Node:
 
     def is_leaf(self) -> bool:
         return not self.children_ids
-    
+
     def __repr__(self) -> str:
         return f"{self.code} {self.desc}"
 
@@ -55,13 +55,14 @@ class Category(Node):
     def within(self, code: str) -> bool:
         return self.min[: len(code)] <= code[: len(self.max)] <= self.max[: len(code)]
 
-class ICD(Node):
 
+class ICD(Node):
     def __repr__(self) -> str:
         return f"{self.id} {self.code} {self.desc}"
-    
+
     def within(self, code: str) -> bool:
         return code[: len(self.code)] == self.code[: len(code)]
+
 
 class Trie:
     def __init__(self) -> None:
@@ -71,7 +72,7 @@ class Trie:
 
     def __repr__(self) -> str:
         return str(self.all)
-    
+
     def get_all_parents(self, node_id: str) -> List[Node]:
         parents = []
         node = self.all[node_id]
@@ -134,7 +135,7 @@ class Trie:
     def __getitem__(self, code: str) -> Node:
         node_id = self.lookup[code]
         return self.all[node_id]
-    
+
     @staticmethod
     def _create_node(code: str, desc: str) -> Node:
         if code:
@@ -145,8 +146,11 @@ class Trie:
             min, max = desc.split("[")[-1].replace("]", "").split("-")
             desc = desc.split("[")[0]
             return Category(
-                id=min.strip()+"-"+max.strip(),
-                max=max.strip(), min=min.strip(), desc=desc.strip(), code=min.strip()
+                id=min.strip() + "-" + max.strip(),
+                max=max.strip(),
+                min=min.strip(),
+                desc=desc.strip(),
+                code=min.strip(),
             )
 
     @staticmethod
@@ -163,14 +167,13 @@ class Trie:
 
 
 class XMLTrie(Trie):
-
     def insert(self, node: Node, root_char: str) -> None:
         root_id = None
         for root in self.roots:
             if self.all[root].code == root_char:
                 root_id = root
                 break
-        
+
         is_root = False
         if not root_id:
             root_id = f"{root_char}"
@@ -191,7 +194,7 @@ class XMLTrie(Trie):
         self.lookup[node.code] = node.id
 
     @staticmethod
-    def from_xml(root: ET.Element, coding_system) -> "XMLTrie":
+    def from_xml(root: ET.Element, coding_system: str) -> "XMLTrie":
         trie = XMLTrie()
         code_root_id = f"{coding_system}"
         if "icd10cm" in coding_system:
@@ -199,21 +202,30 @@ class XMLTrie(Trie):
         elif "icd10pcs" in coding_system:
             trie = XMLTrie.parse_table(trie, root, code_root_id)
         return trie
-    
+
     @staticmethod
     def parse_table(trie: Trie, root: ET.Element, root_node_id: str) -> "XMLTrie":
         """Parse PCS tables and insert them into the trie."""
         num_tables = len(root.findall("pcsTable"))
-        code_root = Category(id=f"{root_node_id}", code=f"{root_node_id}", desc="", min="1", max=f"{num_tables}", assignable=False)
+        code_root = Category(
+            id=f"{root_node_id}", code=f"{root_node_id}", desc="", min="1", max=f"{num_tables}", assignable=False
+        )
         trie.roots.append(code_root.id)
         trie.all[code_root.id] = code_root
         trie.lookup[code_root.code] = code_root.id
         pcs_tables = root.findall("pcsTable")
-        for table_index, pcs_table in track(enumerate(pcs_tables), description="Parsing PCS tables", total=len(pcs_tables)):
+        for table_index, pcs_table in track(
+            enumerate(pcs_tables), description="Parsing PCS tables", total=len(pcs_tables)
+        ):
             table_id = f"{root_node_id}_Table_{table_index + 1}"
             num_rows = len(pcs_table.findall("pcsRow"))
             table_node = Category(
-                id=table_id, code=table_id, desc=f"PCS Table {table_index + 1}", min="1", max=f"{num_rows}", assignable=False
+                id=table_id,
+                code=table_id,
+                desc=f"PCS Table {table_index + 1}",
+                min="1",
+                max=f"{num_rows}",
+                assignable=False,
             )
             trie.insert(table_node, root_char=root_node_id)
 
@@ -240,7 +252,9 @@ class XMLTrie(Trie):
     @staticmethod
     def parse_tabular(trie: Trie, root: ET.Element, root_node_id: str) -> "XMLTrie":
         num_chapters = len(root.findall("chapter"))
-        code_root = Category(id=f"{root_node_id}", code=f"{root_node_id}", desc="", min="1", max=f"{num_chapters}", assignable=False)
+        code_root = Category(
+            id=f"{root_node_id}", code=f"{root_node_id}", desc="", min="1", max=f"{num_chapters}", assignable=False
+        )
         trie.roots.append(code_root.id)
         trie.all[code_root.id] = code_root
         trie.lookup[code_root.code] = code_root.id
@@ -248,18 +262,24 @@ class XMLTrie(Trie):
             for section in chapter.findall("section"):
                 section_id = section.get("id", "")
                 section_desc = section.findtext("desc", "")
-                node = Category(id=f"{section_id}", code=section_id, desc=section_desc, min=section_id.split("-")[0], max=section_id.split("-")[-1], assignable=False)
+                node = Category(
+                    id=f"{section_id}",
+                    code=section_id,
+                    desc=section_desc,
+                    min=section_id.split("-")[0],
+                    max=section_id.split("-")[-1],
+                    assignable=False,
+                )
                 trie.insert(node, root_char=root_node_id)
                 for diag in section.findall("diag"):
                     XMLTrie._parse_diag(trie, diag, parent_code=section_id)
         return trie
-            
-    
+
     @staticmethod
     def from_xml_file(file_path: str, coding_system: str) -> "XMLTrie":
         root = ET.parse(file_path).getroot()
         return XMLTrie.from_xml(root, coding_system)
-    
+
     @staticmethod
     def _parse_diag(trie: "XMLTrie", diag: ET.Element, parent_code: Optional[str] = None) -> None:
         # Extract code and description from the current diag element
@@ -344,19 +364,18 @@ def get_hard_negatives_for_code(code: str, trie: Trie, num: int) -> List[str]:
     return hard_negatives[:num]
 
 
-def get_hard_negatives_for_list_of_codes(
-    codes: list[str], trie: XMLTrie, num: int
-) -> List[str]:
+def get_hard_negatives_for_list_of_codes(codes: list[str], trie: XMLTrie, num: int) -> List[str]:
     hard_negatives = []
     for code in codes:
         hard_negatives.extend(get_hard_negatives_for_code(code, trie, num=num))
     return hard_negatives
 
+
 def add_hard_negatives_to_set(data: pl.DataFrame, trie: Trie, source_col: str, dest_col: str, num: int) -> pl.DataFrame:
     data = data.with_columns(
-        pl.col(source_col).map_elements(
-            lambda codes: get_hard_negatives_for_list_of_codes(codes, trie, num=num)
-        ).alias(dest_col)
+        pl.col(source_col)
+        .map_elements(lambda codes: get_hard_negatives_for_list_of_codes(codes, trie, num=num))
+        .alias(dest_col)
     )
     return data
 
@@ -364,7 +383,7 @@ def add_hard_negatives_to_set(data: pl.DataFrame, trie: Trie, source_col: str, d
 if __name__ == "__main__":
     xml_trie = XMLTrie.from_xml_file(
         "/nfs/nas/mlrd/datasets/medical_coding_systems/icd10cm_2023/icd10cm_tabular_2023.xml",
-        coding_system=f"icd10cm",
+        coding_system="icd10cm",
     )
     print(f"Number of nodes: {len(xml_trie.all)}")
     print(f"Number of leaves: {len(xml_trie.get_leaves())}")
@@ -378,8 +397,8 @@ if __name__ == "__main__":
     print(f"Code {test_code} corresponds to: {text_for_code}")
 
     xml_trie = XMLTrie.from_xml_file(
-        f"/nfs/nas/mlrd/datasets/medical_coding_systems/icd10pcs_2023/icd10pcs_tables_2023.xml",
-        coding_system=f"icd10pcs",
+        "/nfs/nas/mlrd/datasets/medical_coding_systems/icd10pcs_2023/icd10pcs_tables_2023.xml",
+        coding_system="icd10pcs",
     )
     print(f"Number of nodes: {len(xml_trie.all)}")
     print(f"Number of leaves: {len(xml_trie.get_leaves())}")

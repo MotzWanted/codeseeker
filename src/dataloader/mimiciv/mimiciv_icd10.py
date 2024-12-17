@@ -6,6 +6,7 @@ import typing as typ
 import datasets
 import polars as pl
 
+from dataloader import mimic_utils
 from dataloader.mimic_utils import remove_rare_codes
 
 logger = datasets.logging.get_logger(__name__)
@@ -61,8 +62,8 @@ class MIMIC_IV_ICD10(datasets.GeneratorBasedBuilder):
             description=_DESCRIPTION,
             features=datasets.Features(
                 {
-                    "_id": datasets.Value("int64"),
-                    "subject_id": datasets.Value("int64"),
+                    mimic_utils.ID_COLUMN: datasets.Value("int64"),
+                    mimic_utils.SUBJECT_ID_COLUMN: datasets.Value("int64"),
                     "text": datasets.Value("string"),
                     "diagnosis_codes": datasets.Sequence(datasets.Value("string")),
                     "diagnosis_code_type": datasets.Value("string"),
@@ -80,7 +81,7 @@ class MIMIC_IV_ICD10(datasets.GeneratorBasedBuilder):
         # Load the main dataset and split information
         splits = pl.read_ipc(splits_path)
         raw_data = pl.read_parquet(data_path)
-        data = raw_data.join(splits, on="_id")
+        data = raw_data.join(splits, on=mimic_utils.ID_COLUMN)
 
         # remove not used columns
         data = data.drop(["note_seq", "charttime", "storetime"])
@@ -92,7 +93,7 @@ class MIMIC_IV_ICD10(datasets.GeneratorBasedBuilder):
         data = remove_rare_codes(data, ["diagnosis_codes", "procedure_codes"], 10)
 
         # drop duplicates
-        data = data.unique(subset=["_id"])
+        data = data.unique(subset=[mimic_utils.ID_COLUMN])
 
         # filter out rows with no codes
         data = data.filter(pl.col("diagnosis_codes").is_not_null() | pl.col("procedure_codes").is_not_null())
@@ -120,4 +121,4 @@ class MIMIC_IV_ICD10(datasets.GeneratorBasedBuilder):
 
         # Iterate through rows and yield examples
         for row in data.to_dicts():
-            yield row["_id"], row
+            yield row[mimic_utils.ID_COLUMN], row

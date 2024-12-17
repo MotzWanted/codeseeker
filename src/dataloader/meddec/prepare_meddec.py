@@ -39,7 +39,7 @@ def transform_phenotypes(df: pl.DataFrame) -> pl.DataFrame:
     phenotype_exprs = []
 
     for col in df.columns:
-        if col in ["_id", "subject_id", "note_id", "OPERATOR"]:
+        if col in [mimic_utils.ID_COLUMN, mimic_utils.SUBJECT_ID_COLUMN, mimic_utils.ROW_ID_COLUMN, "OPERATOR"]:
             continue
 
         expr = pl.when(pl.col(col) == 1).then(pl.lit(col))
@@ -48,7 +48,11 @@ def transform_phenotypes(df: pl.DataFrame) -> pl.DataFrame:
     # Create a new dataframe with the "PHENOTYPE" column
     return df.select(
         [
-            *[pl.col(col) for col in ["_id", "subject_id", "note_id", "OPERATOR"] if col in df.columns],
+            *[
+                pl.col(col)
+                for col in [mimic_utils.ID_COLUMN, mimic_utils.SUBJECT_ID_COLUMN, mimic_utils.ROW_ID_COLUMN, "OPERATOR"]
+                if col in df.columns
+            ],
             pl.coalesce(phenotype_exprs).alias("PHENOTYPE"),
         ]
     )
@@ -119,7 +123,7 @@ def merge_data(mimic_notes: pl.DataFrame, phenotypes: pl.DataFrame, meddec_annot
     # Extract ROW_ID
     meddec_annotations = meddec_annotations.with_columns(
         meddec_annotations["discharge_summary_id"]
-        .str.extract(r"_(\d+)$", 1)
+        .str.extract(r"_(\d+)?_{0,2}$", 1)
         .cast(pl.Int64)
         .alias(mimic_utils.ROW_ID_COLUMN)
     )
@@ -137,7 +141,7 @@ def merge_data(mimic_notes: pl.DataFrame, phenotypes: pl.DataFrame, meddec_annot
 
     # Join MedDec annotations with MIMIC-III notes
     merged_data = meddec_annotations.join(
-        mimic_notes, on=[mimic_utils.SUBJECT_ID_COLUMN, mimic_utils.ID_COLUMN, mimic_utils.ROW_ID_COLUMN], how="left"
+        mimic_notes, on=[mimic_utils.SUBJECT_ID_COLUMN, mimic_utils.ID_COLUMN], how="left"
     )
 
     # Join the resulting data with phenotypes

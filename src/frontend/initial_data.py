@@ -1,6 +1,7 @@
 import datasets
-from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
-from dataloader.adapters.alignment import NbmeAdapter
+from dataloader import nmbe
+import dataloader
+from dataloader.base import DatasetConfig
 from segmenters import factory
 
 
@@ -11,12 +12,12 @@ def _get_dataset(dset: datasets.Dataset | datasets.DatasetDict) -> datasets.Data
     return next(iter(dset.values()))
 
 
-nbme_data: datasets.Dataset = NbmeDatasetLoader().load_dataset(split="test")  # type: ignore
-
-adapter = NbmeAdapter(segmenter=factory("nbme", spacy_model="en_core_web_lg"))
-nbme_data = nbme_data.map(
-    adapter,
-    desc=f"Adapting dataset to `AlignmentModel` using `{NbmeAdapter.__name__}`.",
-    remove_columns=_get_dataset(nbme_data).column_names,
+config = DatasetConfig(
+    identifier="nbme",
+    name_or_path=nmbe,
+    split="test",
+    options={"segmenter": factory("nbme", spacy_model="en_core_web_lg")},
 )
+
+nbme_data = dataloader.load_dataset(config)
 entry_count = len(nbme_data)

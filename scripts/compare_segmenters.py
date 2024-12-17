@@ -4,8 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 import matplotlib.pyplot as plt
 import datasets
 
-from dataloader.adapters.alignment import NbmeAdapter
-from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
+from dataloader.adapt.adapters.nbme import NbmeAdapter
+from dataloader.nbme.nbme_notes import NbmeDatasetLoader
 from segmenters import factory, Segmenter
 
 PLOTS_FOLDER = Path(__file__).parent.parent / "reports" / "plots"

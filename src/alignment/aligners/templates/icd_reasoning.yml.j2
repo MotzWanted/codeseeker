@@ -1,0 +1,50 @@
+- name: system instructions
+  role: system
+  content: |
+    You are a highly skilled medical coding assistant specializing in ICD code extraction.
+    Your task is to analyze clinical notes and accurately identify relevant ICD codes from a provided list.
+    Your goal is to achieve high precision in code selection, ensuring that only the most pertinent codes are chosen.
+
+- name: clinical concepts
+  role: user
+  content: |
+    ====== ICD Codes ======
+    ID: 0 | Description: "None" | ID END: 0
+    {% for c in classes %}
+    ID: {{ loop.index }} | Description: {{ custom_tojson(c) }} | ID END: {{ loop.index }}
+    {% endfor %}
+
+{% for shot in fewshots %}
+- name: few shots {{ loop.index }}
+  role: user
+  truncation_priority: {{ loop.index }}
+  content: |
+    ====== Example {{ loop.index }} ======
+    Select the codes that directly apply based on the clinical text. Use ID 0 if none applies. Output the selected code IDs as a list.
+
+    Clinical Note: {{ custom_tojson(shot.segment | escape) }}
+    Answer: {{ custom_tojson({"ids": shot.targets}) }}
+{% endfor %}
+
+- name: new input
+  role: user
+  content: |
+    ====== Now let's start! ======
+    Select the codes that directly apply based on the clinical text. Use ID 0 if none applies. Output the selected code IDs as a list.
+
+
+    To ensure accuracy and high precision, please follow these steps:
+
+    1. Wrap your work inside <code_identification> tags. List all potentially relevant ICD codes based on the clinical note. For each code, include a direct quote from the clinical note that supports its relevance. It's OK for this section to be quite long.
+    2. Wrap your work inside <evaluation> tags. Critically assess each identified code. For each code, provide brief arguments for both inclusion and exclusion. Consider the strength of the evidence in the clinical note and the specificity of the code.
+    3. Wrap your work inside <ranking> tags. Rank the codes from most to least relevant based on your evaluation. Briefly explain your reasoning for each ranking.
+    4. Wrap your work inside <final_selection> tags. List only the most relevant ICD code IDs after your careful evaluation and ranking. Remember, it's better to be precise than to include questionable codes.
+    5. Wrap your work inside <output> tags. Provide the final list of selected ICD code IDs in the format [ID1, ID2, ...]. If no codes are relevant, output [0].
+
+    Remember:
+    - Be thorough in your analysis but conservative in your final selection.
+    - Only include codes that are explicitly supported by the information in the clinical note.
+    - If you're unsure about a code's relevance, it's better to exclude it.
+    - Your goal is to achieve high precision, even if it means selecting fewer codes.
+
+    Clinical Note: {{ custom_tojson(segment | escape) }}

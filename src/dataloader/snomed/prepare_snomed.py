@@ -6,11 +6,12 @@ from loguru import logger
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 OUTPUT_DIR = Path("data/snomed/processed")
+MEDICAL_CODING_SYSTEMS_DIR = PROJECT_ROOT / "data/medical-coding-systems"
 
 
 def main():
     snomed_concepts = pl.read_csv(
-        PROJECT_ROOT / "data/snomed/raw/CONCEPT.csv",
+        MEDICAL_CODING_SYSTEMS_DIR / "snomed/CONCEPT.csv",
         truncate_ragged_lines=True,
         separator="\t",
         quote_char=None,  # Disable special quote character processing

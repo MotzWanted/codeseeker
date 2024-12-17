@@ -78,13 +78,13 @@ class NbmeDatasetLoader:
         if isinstance(data, datasets.Dataset):
             fewshot_data = self._get_fewshot_data(data, shots_from_same_patient)
             data = data.map(
-                lambda row: {"few_shot": fewshot_data[row["case_num"]]},
+                lambda row: {"fewshots": fewshot_data[row["case_num"]]},
             )
             return data
         for split, dset in data.items():
             fewshot_data = self._get_fewshot_data(dset, shots_from_same_patient)
             data[split] = dset.map(
-                lambda row: {"few_shot": fewshot_data[row["case_num"]]},
+                lambda row: {"fewshots": fewshot_data[row["case_num"]]},
             )
 
         return data

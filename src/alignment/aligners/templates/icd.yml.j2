@@ -1,0 +1,36 @@
+- name: system instructions
+  role: system
+  content: |
+    You are a highly skilled medical coding assistant specializing in ICD code extraction.
+    Your task is to analyze clinical notes and accurately identify relevant ICD codes from a provided list.
+    Your goal is to achieve high precision in code selection, ensuring that only the most pertinent codes are chosen.
+
+- name: clinical concepts
+  role: user
+  content: |
+    ====== ICD Codes ======
+    ID: 0 | Description: "None" | ID END: 0
+    {% for c in classes %}
+    ID: {{ loop.index }} | Description: {{ custom_tojson(c) }} | ID END: {{ loop.index }}
+    {% endfor %}
+
+{% for shot in fewshots %}
+- name: few shots {{ loop.index }}
+  role: user
+  truncation_priority: {{ loop.index }}
+  content: |
+    ====== Example {{ loop.index }} ======
+    Select the codes that directly applies based on the clinical text. Use ID 0 if none applies. Output the selected code IDs as a list.
+
+    Clinical Note: {{ custom_tojson(shot.segment | escape) }}
+    Answer: {{ custom_tojson({"ids": shot.targets}) }}
+{% endfor %}
+
+- name: new input
+  role: user
+  content: |
+    ====== Now let's start! ======
+    Select the codes that directly applies based on the clinical text. Use ID 0 if none applies. Output the selected code IDs as a list.
+
+    Clinical Note: {{ custom_tojson(segment | escape) }}
+    Answer:

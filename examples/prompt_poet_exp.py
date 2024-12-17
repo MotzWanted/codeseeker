@@ -5,8 +5,8 @@ import typing as typ
 from prompt_poet import Prompt
 import rich
 
-from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
-from dataloader.adapters.alignment import NbmeAdapter
+from dataloader.nbme.nbme_notes import NbmeDatasetLoader
+from dataloader.adapt.alignment import NbmeAdapter
 from segmenters.base import WindowSegmenter
 
 

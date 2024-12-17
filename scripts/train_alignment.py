@@ -21,7 +21,7 @@ from rich.table import Table
 from torch.utils import data as torch_data
 from wandb.integration.lightning.fabric import WandbLogger
 
-from dataloader.adapters.alignment import AlignmentModelForTraining
+from dataloader.adapt.alignment import AlignmentModelForTraining
 from finetune import helpers, loop
 from finetune.callback import PrintCallback
 from finetune.monitor import MeanMonitor

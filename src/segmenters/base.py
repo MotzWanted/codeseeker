@@ -112,6 +112,19 @@ class WindowSegmenter(Segmenter):
             cursor += self.size - self.overlap
 
 
+class DocumentSegmenter(Segmenter):
+    """Chunks a sequence into documents."""
+
+    def __call__(self, text: str) -> typ.Iterable[Segment]:
+        """Chunk a sequence into documents."""
+        cursor = 0
+        yield Segment(
+            text=text,
+            start=cursor,
+            end=len(text),
+        )
+
+
 class SpacySegmenter(Segmenter):
     """Chunks a sequence into sentences using spaCy."""
 
@@ -241,6 +254,8 @@ def factory(type_: str, spacy_model: str) -> Segmenter:
     """Return a segmenter."""
     if type_ == "spacy":
         segmenter = SpacySegmenter(spacy_model, min_length=5)
+    elif type_ == "document":
+        segmenter = DocumentSegmenter()
     elif type_ == "nbme":
         segmenter = NbmeSegmenter()
     elif type_ == "sentence":

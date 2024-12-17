@@ -18,9 +18,11 @@ download-data :
 
 .PHONY: prepare-data
 prepare-data:
-	poetry run python src/dataloader/mimic-iii/prepare_mimiciii.py data/mimic-iii/raw data/mimic-iii/processed
-	poetry run python src/dataloader/mimic-iv/prepare_mimiciv.py data/mimic-iv/raw data/mimic-iv/processed
+	poetry run python src/dataloader/mimiciii/prepare_mimiciii.py data/mimic-iii/raw data/mimic-iii/processed
+	poetry run python src/dataloader/mimiciv/prepare_mimiciv.py data/mimic-iv/raw data/mimic-iv/processed
 	poetry run python src/dataloader/mdace/prepare_mdace.py data/mdace/raw data/mdace/processed
+	poetry run python src/dataloader/meddec/prepare_meddec.py data/meddec/raw data/meddec/processed
+	poetry run python src/dataloader/snomed/prepare_snomed.py data/snomed/raw data/snomed/processed
 
 .PHONY: install
 install:  ## Install the package for development along with pre-commit hooks.

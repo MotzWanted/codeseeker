@@ -3,6 +3,11 @@ import pathlib
 import typing as typ
 
 import datasets
+from datasets import fingerprint
+import pydantic
+from pydantic_settings import SettingsConfigDict
+
+from segmenters.base import Segmenter
 
 
 CACHE_DIR = str(pathlib.Path(os.environ.get("CACHE_DIR", "~/.cache/docgen")).expanduser())
@@ -18,3 +23,96 @@ class DatasetLoader(typ.Protocol):
     ) -> datasets.DatasetDict | datasets.Dataset:
         """Load a dataset."""
         ...
+
+
+class DatasetOptions(pydantic.BaseModel):
+    """Preprocessing options."""
+
+    prep_map_kws: dict[str, typ.Any] = pydantic.Field(
+        default_factory=dict,
+        description="Kwargs for `datasets.map(...)`.",
+    )
+    subset_size: None | int = pydantic.Field(
+        default=None,
+        description="Take a subset of the dataset.",
+    )
+    segmenter: Segmenter = pydantic.Field(
+        ...,
+        description="Configures a sectioning algorithm to split input documents/sections into smaller chunks.",
+    )
+    negatives: int = pydantic.Field(
+        default=-1,
+        description="Number of negative examples to generate.",
+    )
+    shots: int = pydantic.Field(
+        default=0,
+        description="Number of shots for few-shot learning.",
+    )
+    seed: int = pydantic.Field(
+        default=0,
+        description="Seed for reproducibility.",
+    )
+    model_config = SettingsConfigDict(arbitrary_types_allowed=True)
+
+
+class DatasetConfig(pydantic.BaseModel):
+    """Defines a dataset."""
+
+    identifier: str = pydantic.Field(  # type: ignore | auto-lowercase
+        ...,
+        description="Name of the dataset",
+    )
+    name_or_path: str | DatasetLoader = pydantic.Field(
+        ...,
+        description="Path to the dataset loader (overrides `name`)",
+    )
+    subsets: list[str] = pydantic.Field(
+        default_factory=list,
+        description="A list of subset names to load.",
+    )
+    split: str | None = pydantic.Field(
+        None,
+        description="Dataset split (train, etc.)",
+    )
+    trust_remote_code: bool = pydantic.Field(
+        default=True,
+        description="Trust remote code.",
+    )
+    options: DatasetOptions = pydantic.Field(
+        default_factory=DatasetOptions,  # type: ignore
+        description="Loading/preprocessing options.",
+    )
+
+    model_config = SettingsConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid", from_attributes=True)
+
+    def __hash__(self) -> int:
+        """Hash the object based on its name and split."""
+        return hash(self.fingerprint())
+
+    @pydantic.computed_field
+    def fingerprint(self) -> str:
+        """Return the hexdigest of the hash."""
+        data = self.model_dump()
+        if not isinstance(self.name_or_path, str):
+            self.name_or_path = fingerprint.Hasher.hash(self.name_or_path)
+        return fingerprint.Hasher.hash(data)
+
+    @pydantic.field_validator("options", mode="before")
+    @classmethod
+    def _validate_options(
+        cls: type[typ.Self], v: None | dict[str, typ.Any] | DatasetOptions
+    ) -> dict[str, typ.Any] | DatasetOptions:
+        if isinstance(v, DatasetOptions):
+            return v
+
+        return DatasetOptions(**(v or {}))
+
+    @pydantic.field_validator("subsets", mode="before")
+    @classmethod
+    def _validate_subsets(cls: type[typ.Self], value: None | str | list[str]) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+
+        return [str(x) for x in value]

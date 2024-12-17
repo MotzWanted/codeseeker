@@ -1,5 +1,6 @@
 """Snomed: SNOMED CT Entity Linking Challenge."""
 
+import json
 import typing as typ
 
 import datasets
@@ -59,24 +60,50 @@ class Snomed(datasets.GeneratorBasedBuilder):
             features=datasets.Features(
                 {
                     "note_id": datasets.Value("string"),
-                    "start": datasets.Value("int64"),
-                    "end": datasets.Value("int64"),
-                    "concept_id": datasets.Value("int64"),
                     "text": datasets.Value("string"),
+                    "annotations": datasets.Sequence(
+                        {
+                            "start": datasets.Value("int64"),
+                            "end": datasets.Value("int64"),
+                            "concept_id": datasets.Value("int64"),
+                            "concept_name": datasets.Value("string"),
+                        }
+                    ),
+                    "classes": datasets.Value("string"),
+                    "fewshots": datasets.Sequence(
+                        {
+                            "start": datasets.Value("int64"),
+                            "end": datasets.Value("int64"),
+                            "concept_id": datasets.Value("int64"),
+                            "concept_name": datasets.Value("string"),
+                        }
+                    ),
                 }
             ),
             citation=_CITATION,
+        )
+
+    def aggregate_rows(self, data: pl.DataFrame) -> pl.DataFrame:
+        """Process the MedDec data."""
+        return data.group_by(["note_id", "text"]).agg(
+            [
+                # Collect all annotations as a list of dictionaries
+                pl.struct(["start", "end", "concept_id", "concept_name"]).alias("annotations")
+            ]
         )
 
     def _split_generators(self, dl_manager: datasets.DownloadManager) -> list[datasets.SplitGenerator]:  # type: ignore
         data_path = dl_manager.download_and_extract(str(_DATA_PATH / "snomed.parquet"))
 
         data = pl.read_parquet(data_path)
+        classes = {k: v for k, v in zip(data["concept_id"], data["concept_name"])}
+        aggregated_data = self.aggregate_rows(data)
+        aggregated_data = aggregated_data.with_columns([pl.lit(json.dumps(classes)).alias("classes")])
 
         return [
             datasets.SplitGenerator(
                 name=datasets.Split.TRAIN,
-                gen_kwargs={"data": data},
+                gen_kwargs={"data": aggregated_data},
             ),
         ]
 
@@ -85,5 +112,4 @@ class Snomed(datasets.GeneratorBasedBuilder):
     ) -> typ.Generator[tuple[int, dict[str, typ.Any]], None, None]:  # type: ignore
         """Generate examples from the dataset."""
         for row in data.to_dicts():
-            _hash = hash(frozenset(row.items()))
-            yield _hash, row
+            yield row["note_id"], row

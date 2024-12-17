@@ -1,7 +1,9 @@
 import abc
+import ast
 import json
 from pathlib import Path
 import random
+import re
 import typing as typ
 
 from jinja2 import Environment, FileSystemLoader
@@ -41,15 +43,15 @@ class LLMAligner(Aligner):
         self.sampling_params = sampling_params
 
     async def predict(
-        self, client: ModelInterface, entities: list[str], segments: list[str], fewshots: list | None = [], **kwargs
+        self, client: ModelInterface, classes: list[str], segments: list[str], fewshots: list | None = [], **kwargs
     ) -> Alignment:
-        """Align a list of segments elements to a entities."""
+        """Align a list of segments elements to a classes."""
         fewshots = fewshots or []
 
-        results = await self.generate_alignments(client=client, entities=entities, segments=segments, fewshots=fewshots)
+        results = await self.generate_alignments(client=client, classes=classes, segments=segments, fewshots=fewshots)
 
-        sparse_matrix = np.zeros((len(segments), len(entities)))
-        probs_matrix = np.zeros((len(segments), len(entities)))
+        sparse_matrix = np.zeros((len(segments), len(classes)))
+        probs_matrix = np.zeros((len(segments), len(classes)))
         for i, r in enumerate(results):
             sparse_vector, probs_vector = r
             sparse_matrix[i] = sparse_vector
@@ -61,7 +63,7 @@ class LLMAligner(Aligner):
 
     @abc.abstractmethod
     async def generate_alignments(
-        self, client: ModelInterface, entities: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
+        self, client: ModelInterface, classes: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
     ) -> list[tuple[np.ndarray, np.ndarray]]: ...
 
     @staticmethod
@@ -107,26 +109,26 @@ class LLMAligner(Aligner):
 class StructuredLLMAligner(LLMAligner):
     """A LLM-based Alignment model applying long-context retrieval."""
 
-    def __init__(self, max_attempts: int = 5, *args, **kwargs):
+    def __init__(self, max_attempts: int = 1, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.max_attempts = max_attempts
 
     async def predict(
-        self, client: ModelInterface, entities: list[str], segments: list[str], fewshots: list | None = [], **kwargs
+        self, client: ModelInterface, classes: list[str], segments: list[str], fewshots: list | None = [], **kwargs
     ) -> Alignment:
-        """Align a list of entities elements to a set of segments."""
+        """Align a list of classes elements to a set of segments."""
         fewshots = fewshots or []
         if isinstance(client, VllmOpenAiInterface):
             # Activate prefix caching in KV cache.
-            request = self.format_request(client=client, segment=segments[0], entities=entities, fewshots=fewshots)
+            request = self.format_request(client=client, segment=segments[0], classes=classes, fewshots=fewshots)
             await client.call(request=request)
-        return await super().predict(client=client, entities=entities, segments=segments, fewshots=fewshots)
+        return await super().predict(client=client, classes=classes, segments=segments, fewshots=fewshots)
 
     async def generate_alignments(
-        self, client: ModelInterface, entities: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
+        self, client: ModelInterface, classes: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
     ) -> list[tuple[np.ndarray, np.ndarray]]:
         """Generate an alignment for a task."""
-        requests = [self.format_request(client, entities=entities, segment=s, fewshots=fewshots) for s in segments]
+        requests = [self.format_request(client, classes=classes, segment=s, fewshots=fewshots) for s in segments]
         responses: list[BaseResponse] = await client.structured_batch_call(
             requests=requests, schema=AlignmentSingleton, max_attempts=self.max_attempts
         )
@@ -134,20 +136,18 @@ class StructuredLLMAligner(LLMAligner):
         for response in responses:
             if isinstance(response, (StructuredResponseError, type(None))):
                 # If the response is an error, return a zero prediction
-                results.append((np.zeros(len(entities)), np.zeros(len(entities))))
+                results.append((np.zeros(len(classes)), np.zeros(len(classes))))
                 continue
-            preds, probs = self.compress_choices(response.choices, entities_size=len(entities) + 1)
-            sparse_vector, probs_vector = self.parse_response(preds, probs, entities)
+            preds, probs = self.compress_choices(response.choices, classes_size=len(classes) + 1)
+            sparse_vector, probs_vector = self.parse_response(preds, probs, classes)
             results.append((sparse_vector, probs_vector))
         return results
 
-    def parse_response(
-        self, preds: list[int], probs: list[float], entities: list[str]
-    ) -> tuple[np.ndarray, np.ndarray]:
+    def parse_response(self, preds: list[int], probs: list[float], classes: list[str]) -> tuple[np.ndarray, np.ndarray]:
         """Parse the response and return the alignment."""
-        sparse_vector = np.zeros(len(entities))
-        probs_vector = np.zeros(len(entities))
-        for i, _ in enumerate(entities, start=1):
+        sparse_vector = np.zeros(len(classes))
+        probs_vector = np.zeros(len(classes))
+        for i, _ in enumerate(classes, start=1):
             if i not in preds:
                 continue
             sparse_vector[i - 1] = 1
@@ -155,10 +155,10 @@ class StructuredLLMAligner(LLMAligner):
         return sparse_vector, probs_vector
 
     def format_request(
-        self, client: ModelInterface, segment: str, entities: list[str], fewshots: list[dict[str, typ.Any]]
+        self, client: ModelInterface, segment: str, classes: list[str], fewshots: list[dict[str, typ.Any]]
     ) -> dict[str, typ.Any]:
         """Predict the true/false alignment."""
-        prompt_template = self.format_prompt_with_shots(fewshots, segment=segment, entities=entities)
+        prompt_template = self.format_prompt_with_shots(fewshots, segment=segment, classes=classes)
         prompt = self.prompt_messages_or_string(client, prompt_template)
         return {
             "prompt": prompt,
@@ -167,18 +167,18 @@ class StructuredLLMAligner(LLMAligner):
             **self.sampling_params,
         }
 
-    def compress_choices(self, choices: list[ResponseChoice], entities_size: int) -> tuple[list[int], list[float]]:
+    def compress_choices(self, choices: list[ResponseChoice], classes_size: int) -> tuple[list[int], list[float]]:
         """Compress the choices into a prediction and probability by a majority vote and by averaging the probabilities.
         NOTE: Figure out how to average predictions across choices. Conformal prediction?
         """
         c = choices[0]
         preds = c.validated_schema.ids or [  # type: ignore
-            int(token) if self._is_predicted_alignment(token, entities_size) else 0.0
+            int(token) if self._is_predicted_alignment(token, classes_size) else 0.0
             for token in c.content.split()  # type: ignore
         ]
         probs = [0.0] * len(preds)
         if c.logprobs:
-            logprobs = self._lookup_logprobs(c.logprobs, entities_size)
+            logprobs = self._lookup_logprobs(c.logprobs, classes_size)
             preds = [int(token) if token.isdigit() else 0 for token in logprobs.tokens]
             if not preds:
                 logger.info(
@@ -202,29 +202,109 @@ class StructuredLLMAligner(LLMAligner):
         return preds, probs
 
     @staticmethod
-    def _is_predicted_alignment(token: str, entities_size: int) -> bool:
-        return (token.isdigit() and int(token) < entities_size) or "[]" in token
+    def _is_predicted_alignment(token: str, classes_size: int) -> bool:
+        return (token.isdigit() and int(token) < classes_size) or "[]" in token
 
-    def _lookup_logprobs(self, logprobs: LogProbs, entities_size: int) -> LogProbs:
+    def _lookup_logprobs(self, logprobs: LogProbs, classes_size: int) -> LogProbs:
         """Based on a list of tokens we need to find logprobs of those tokens that represent the alignment predictions.
         We are looking for numeric tokens and the token "[]" which represents the absence of an alignment ("[0]").
         """
         _logprobs = logprobs.model_copy()
         valid_indices = [
-            i for i, token in enumerate(logprobs.tokens) if self._is_predicted_alignment(token, entities_size)
+            i for i, token in enumerate(logprobs.tokens) if self._is_predicted_alignment(token, classes_size)
         ]
 
         _logprobs.text_offset = [logprobs.text_offset[i] for i in valid_indices]
         _logprobs.token_logprobs = [logprobs.token_logprobs[i] for i in valid_indices]
         _logprobs.tokens = [logprobs.tokens[i] for i in valid_indices]
         _logprobs.top_logprobs = [
-            self._lookup_top_logprobs(logprobs.top_logprobs[i], entities_size) for i in valid_indices
+            self._lookup_top_logprobs(logprobs.top_logprobs[i], classes_size) for i in valid_indices
         ]
 
         return _logprobs
 
-    def _lookup_top_logprobs(self, top_logprobs: dict[str, float], entities_size: int) -> dict[str, float]:
-        return {k: v for k, v in top_logprobs.items() if self._is_predicted_alignment(k, entities_size)}
+    def _lookup_top_logprobs(self, top_logprobs: dict[str, float], classes_size: int) -> dict[str, float]:
+        return {k: v for k, v in top_logprobs.items() if self._is_predicted_alignment(k, classes_size)}
+
+
+class RegexLLMAligner(StructuredLLMAligner):
+    """A LLM-based Alignment model applying long-context retrieval."""
+
+    # LIST_REGEX_PATTERN = r"\[\s*\d+\s*(,\s*\d+\s*){0,20}\]"
+    ICD_CODE_LIST = r"\[\d+(,\d+){0,19}\]\n"
+    REASONING_PATTERN = r'Answer: T[\w \\",\\.]{30,250}. The final ICD codes are: ' + ICD_CODE_LIST
+
+    def __init__(self, regex_pattern: re.Pattern = ICD_CODE_LIST, max_attempts: int = 5, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.regex_pattern = regex_pattern
+        self.max_attempts = max_attempts
+
+    async def generate_alignments(
+        self, client: ModelInterface, classes: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
+        """Generate an alignment for a task."""
+        requests = [self.format_request(client, classes=classes, segment=s, fewshots=fewshots) for s in segments]
+        responses: list[BaseResponse] = await client.batch_call(requests=requests)
+        results = []
+        for response in responses:
+            try:
+                icd_list = response.choices[0].content.split("The final ICD codes are: ")[-1]
+                ast.literal_eval(icd_list)
+            except ValueError:
+                # If the response is an error, return a zero prediction
+                logger.info("Could not parse the response list.")
+                results.append((np.zeros(len(classes)), np.zeros(len(classes))))
+                continue
+            preds, probs = self.compress_choices(response.choices, classes_size=len(classes) + 1)
+            sparse_vector, probs_vector = self.parse_response(preds, probs, classes)
+            results.append((sparse_vector, probs_vector))
+        return results
+
+    def format_request(
+        self, client: ModelInterface, segment: str, classes: list[str], fewshots: list[dict[str, typ.Any]]
+    ) -> dict[str, typ.Any]:
+        """Predict the true/false alignment."""
+        prompt_template = self.format_prompt_with_shots(fewshots, segment=segment, classes=classes)
+        prompt = self.prompt_messages_or_string(client, prompt_template)
+        return {
+            "prompt": prompt,
+            "guided_regex": self.regex_pattern,
+            "seed": self.seed,
+            "stop": ["\n"],
+            **self.sampling_params,
+        }
+
+    def compress_choices(self, choices: list[ResponseChoice], classes_size: int) -> tuple[list[int], list[float]]:
+        """Compress the choices into a prediction and probability by a majority vote and by averaging the probabilities.
+        NOTE: Figure out how to average predictions across choices. Conformal prediction?
+        """
+        c = choices[0]
+        icd_list = c.content.split("The final ICD codes are: ")[-1]
+        preds = ast.literal_eval(icd_list)
+        probs = [0.0] * len(preds)
+        if c.logprobs:
+            logprobs = self._lookup_logprobs(c.logprobs, classes_size)
+            preds = [int(token) if token.isdigit() else 0 for token in logprobs.tokens]
+            if not preds:
+                logger.info(
+                    f"Could not find any relevant tokens in logprobs for the predicted tokens: {c.logprobs.tokens}."
+                )
+                logger.info("Using logprobs -0.01 instead.")
+                preds = [0]
+            top_logprobs = np.array([list(top_logprobs.values()) for top_logprobs in logprobs.top_logprobs])
+            if top_logprobs.size == 0:
+                logger.info(
+                    f"Could not find any relevant tokens in top logprobs for the predicted tokens: {c.logprobs.tokens}."
+                )
+                logger.info("Using logprobs -0.01 instead.")
+                top_logprobs = np.array([[-0.01] * len(preds)])
+            norm_top_probs = self.normalized_exp_values(top_logprobs, axis=-1)
+            probs = np.max(norm_top_probs, axis=-1)
+
+        if len(preds) != len(probs):
+            raise ValueError("Predictions and probabilities are not of the same length.")
+
+        return preds, probs
 
 
 class StructuredLLMSelfAligner(StructuredLLMAligner):
@@ -235,30 +315,30 @@ class StructuredLLMSelfAligner(StructuredLLMAligner):
         self.max_attempts = max_attempts
 
     async def generate_alignments(
-        self, client: ModelInterface, entities: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
+        self, client: ModelInterface, classes: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
     ) -> list[tuple[np.ndarray, np.ndarray]]:
         """Generate an alignment for a task."""
         results = []
         extended_fewshots = fewshots.copy()
         for s in segments:
-            request = self.format_request(client, entities=entities, segment=s, fewshots=extended_fewshots)
+            request = self.format_request(client, classes=classes, segment=s, fewshots=extended_fewshots)
             try:
                 response: BaseResponse = await client.structured_call(request=request, schema=AlignmentSingleton)
-                preds, probs = self.compress_choices(response.choices, entities_size=len(entities) + 1)
-                sparse_vector, probs_vector = self.parse_response(preds, probs, entities)
+                preds, probs = self.compress_choices(response.choices, classes_size=len(classes) + 1)
+                sparse_vector, probs_vector = self.parse_response(preds, probs, classes)
                 results.append((sparse_vector, probs_vector))
             except StructuredResponseError:
-                results.append((np.zeros(len(entities)), np.zeros(len(entities))))
+                results.append((np.zeros(len(classes)), np.zeros(len(classes))))
                 continue
             # Add the predictions to the fewshots for the next segment
             extended_fewshots.append({"segment": s, "labels": preds})
         return results
 
     def format_request(
-        self, client: ModelInterface, segment: str, entities: list[str], fewshots: list[dict[str, typ.Any]]
+        self, client: ModelInterface, segment: str, classes: list[str], fewshots: list[dict[str, typ.Any]]
     ) -> dict[str, typ.Any]:
         """Predict the true/false alignment."""
-        prompt_template = self.format_prompt_with_shots(fewshots, segment=segment, entities=entities)
+        prompt_template = self.format_prompt_with_shots(fewshots, segment=segment, classes=classes)
         prompt = self.prompt_messages_or_string(client, prompt_template)
         return {
             "prompt": prompt,
@@ -294,6 +374,14 @@ def create_llm_aligner(
     #     return BinaryLLMAligner(prompt_name, num_shots, token_limit, seed, sampling_params)
     if aligner_type == "structured":
         return StructuredLLMAligner(
+            prompt_name=prompt_name,
+            num_shots=num_shots,
+            token_limit=token_limit,
+            seed=seed,
+            sampling_params=sampling_params,
+        )
+    elif aligner_type == "regex":
+        return RegexLLMAligner(
             prompt_name=prompt_name,
             num_shots=num_shots,
             token_limit=token_limit,

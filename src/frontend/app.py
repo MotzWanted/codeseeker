@@ -31,7 +31,7 @@ class Clients:
 
 throughsters = Clients()
 aligner = StructuredLLMAligner(
-    prompt_name="loft",
+    prompt_name="note2feature",
     num_shots=0,
     token_limit=128000,
     seed=1,
@@ -58,7 +58,7 @@ async def get_event_loop():
     throughsters.gpt_4_turbo = create_interface("azure", model_name="gpt-4-turbo-0409-1", use_cache=True)
     throughsters.mistral_large = create_interface("mistral", use_cache=True)
     throughsters.local_llm = create_interface(
-        "vllm", endpoint="completions", model_name="meta-llama/Meta-Llama-3.1-70B-Instruct", use_cache=True
+        "vllm", endpoint="completions", model_name="meta-llama/Llama-3.1-8B-Instruct", use_cache=True
     )
     throughsters.gpt_35_turbo = create_interface("azure", model_name="gpt-35-turbo-1", use_cache=True)
 
@@ -75,7 +75,8 @@ async def chunk_transcript(
 ) -> list[str]:
     """Chunk the transcript."""
     requests = {
-        "messages": Prompt(prompt_template, template_data={"transcript": transcript}),
+        "messages": Prompt(prompt_template),
+        "template_data": {"transcript": transcript},
         **sampling_params,
     }
 
@@ -112,21 +113,21 @@ async def home() -> str:
     model = request.args.get("model", "gpt_4_turbo")
     client = throughsters.get(model)
 
-    corpus = nbme_data[entry_index]["corpus"]
-    queries = nbme_data[entry_index]["queries"]
-    labels = nbme_data[entry_index]["labels"]
+    classes = nbme_data[entry_index]["classes"]
+    segments = nbme_data[entry_index]["segments"]
+    targets = nbme_data[entry_index]["targets"]
 
-    alignment_data = await aligner.predict(client=client, corpus=corpus, queries=queries)
+    alignment_data = await aligner.predict(client=client, entities=classes, segments=segments)
 
-    metrics = evaluation_metrics(labels, alignment_data.indexes)
-    match_counts = get_match_count(labels, alignment_data.indexes)
+    metrics = evaluation_metrics(targets, alignment_data.indexes)
+    match_counts = get_match_count(targets, alignment_data.indexes)
 
     return render_template(
         "index-with-labels.html",
         match_counts=match_counts,
-        sources=corpus,
-        targets=queries,
-        labels=labels,
+        sources=classes,
+        targets=segments,
+        labels=targets,
         selected_entry=entry_index,
         num_entries=entry_count,
         model=model,
@@ -161,8 +162,8 @@ async def align() -> str:
 
         alignment_data = await aligner.predict(
             client=client,
-            queries=output["targets"] if isinstance(output["targets"], list) else _flatten_list(output["targets"]),
-            corpus=output["sources"] if isinstance(output["sources"], list) else _flatten_list(output["sources"]),
+            entities=output["targets"] if isinstance(output["targets"], list) else _flatten_list(output["targets"]),
+            segments=output["sources"] if isinstance(output["sources"], list) else _flatten_list(output["sources"]),
         )
 
         match_counts = [sum(1 if val == 1 or val == -1 else 0 for val in sublist) for sublist in alignment_data.matrix]

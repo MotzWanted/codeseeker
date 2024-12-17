@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from alignment.aligners.llm import create_llm_aligner
 from alignment.ops import HfSyntheticAlignment
 from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
-from dataloader.adapters.alignment import NbmeAdapter
+from dataloader.adapt.alignment import NbmeAdapter
 from throughster.factory import create_interface
 from segmenters import factory, Segmenter
 

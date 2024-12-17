@@ -6,6 +6,7 @@ import typing as typ
 import datasets
 import polars as pl
 
+from dataloader import mimic_utils
 from src.dataloader.mimic_utils import keep_top_k_codes
 
 logger = datasets.logging.get_logger(__name__)
@@ -67,8 +68,8 @@ class MIMIC_III_50(datasets.GeneratorBasedBuilder):
             description=_DESCRIPTION,
             features=datasets.Features(
                 {
-                    "subject_id": datasets.Value("int64"),
-                    "_id": datasets.Value("int64"),
+                    mimic_utils.SUBJECT_ID_COLUMN: datasets.Value("int64"),
+                    mimic_utils.ID_COLUMN: datasets.Value("int64"),
                     "note_type": datasets.Value("string"),
                     "note_subtype": datasets.Value("string"),
                     "text": datasets.Value("string"),
@@ -88,7 +89,7 @@ class MIMIC_III_50(datasets.GeneratorBasedBuilder):
         # Load raw data and split information
         splits = pl.read_ipc(splits_path)
         raw_data = pl.read_parquet(data_path)
-        data = raw_data.join(splits, on="_id")
+        data = raw_data.join(splits, on=mimic_utils.ID_COLUMN)
 
         # Process the dataset
         data = self._process_data(data)
@@ -117,7 +118,7 @@ class MIMIC_III_50(datasets.GeneratorBasedBuilder):
         data = data.filter((pl.col("diagnosis_code_type") == "icd9cm") | (pl.col("procedure_code_type") == "icd9pcs"))
 
         # Remove duplicates
-        data = data.unique(subset=["_id"])
+        data = data.unique(subset=[mimic_utils.ID_COLUMN])
 
         # Keep only the top 50 codes
         data = keep_top_k_codes(data, ["diagnosis_codes", "procedure_codes"], 50)
@@ -134,4 +135,4 @@ class MIMIC_III_50(datasets.GeneratorBasedBuilder):
         data = data.drop("split")
 
         for row in data.to_dicts():
-            yield row["_id"], row
+            yield row[mimic_utils.ID_COLUMN], row

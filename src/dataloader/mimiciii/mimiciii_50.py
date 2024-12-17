@@ -6,6 +6,8 @@ import typing as typ
 import datasets
 import polars as pl
 
+from dataloader import mimic_utils
+
 logger = datasets.logging.get_logger(__name__)
 
 
@@ -71,9 +73,9 @@ class MIMIC_III_50(datasets.GeneratorBasedBuilder):
             description=_DESCRIPTION,
             features=datasets.Features(
                 {
-                    "subject_id": datasets.Value("int64"),
-                    "_id": datasets.Value("int64"),
-                    "note_type": datasets.Value("string"),
+                    mimic_utils.SUBJECT_ID_COLUMN: datasets.Value("int64"),
+                    mimic_utils.ID_COLUMN: datasets.Value("int64"),
+                    mimic_utils.ROW_ID_COLUMN: datasets.Value("string"),
                     "note_subtype": datasets.Value("string"),
                     "text": datasets.Value("string"),
                     "diagnosis_codes": datasets.Sequence(datasets.Value("string")),
@@ -110,5 +112,5 @@ class MIMIC_III_50(datasets.GeneratorBasedBuilder):
         dataframe = pl.read_parquet(filepath)
 
         for row in dataframe.to_dicts():
-            yield row["_id"], row
+            yield row[mimic_utils.ID_COLUMN], row
             key += 1

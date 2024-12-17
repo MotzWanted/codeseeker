@@ -2,7 +2,7 @@ from pathlib import Path
 import datasets
 import pytest
 
-from dataloader.adapters.alignment import NbmeAdapter
+from dataloader.adapt.alignment import NbmeAdapter
 from segmenters.base import Segmenter, factory
 
 BASE_PATH = Path("tests/alignment/data")
