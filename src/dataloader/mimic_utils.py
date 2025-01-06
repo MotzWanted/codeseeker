@@ -3,10 +3,12 @@
 import numpy as np
 import polars as pl
 from datasets import DatasetDict
+from typing import Literal
 
 ROW_ID_COLUMN = "note_id"
 ID_COLUMN = "hadm_id"
 TEXT_COLUMN = "text"
+TEXT_ADMISSION_COLUMN = "text_admission"
 TARGET_COLUMN = "target"
 SUBJECT_ID_COLUMN = "subject_id"
 SOS = "<sos>"
@@ -343,3 +345,88 @@ def filter_unknown_targets(example: dict, known_targets: set[str]) -> dict:
                 example["procedure_code_spans"] = None
 
     return example
+
+
+def map_careunit(careunit: str) -> str:
+    """
+    Map raw care units to broader categories.
+
+    Args:
+        careunit (str): Raw care unit.
+
+    Returns:
+        str: Mapped care unit category.
+    """
+    surgery = ['Med/Surg', 'Surgery', 'Medical/Surgical (Gynecology)', 'PACU']
+    cardiology = ['Cardiology', 'Medicine/Cardiology']
+    neurology = ['Neurology', 'Neuro Intermediate']
+    obstetrics = ['Labor & Delivery', 'Obstetrics Postpartum']
+    oncology = ['Hematology/Oncology']
+    observation = ['Observation']
+
+    if careunit in surgery:
+        return "surgery"
+    elif careunit in cardiology:
+        return "cardiology"
+    elif careunit in neurology:
+        return "neurology"
+    elif careunit in obstetrics:
+        return "obstetrics"
+    elif careunit in oncology:
+        return "oncology"
+    elif careunit in observation:
+        return "observation"
+    else:
+        return "other"
+
+def filter_admission_text(notes_df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Filter text information by section and only keep sections that are known at admission time.
+    Polars-compatible implementation.
+    """
+    # Define the sections and their corresponding regex patterns
+    admission_sections = {
+        "chief_complaint": r"chief complaint:",
+        "present_illness": r"present illness:",
+        "medical_history": r"medical history:",
+        "medication_adm": r"medications on admission:",
+        "allergies": r"allergies:",
+        "physical_exam": r"physical exam:",
+        "family_history": r"family history:",
+        "social_history": r"social history:",
+    }
+
+    # Replace linebreak indicators
+    notes_df = notes_df.with_columns(
+        pl.col("text").str.replace("___\nFamily History:", "___\n\nFamily History:")
+    )
+
+    # Extract each section using regex
+    for key, section in admission_sections.items():
+        pattern = rf"{section}([\s\S]+?)\n\s*?\n[^(\\|\d|\.)]+?:"
+        extracted_col = notes_df["text"].str.extract(pattern, group_index=1)
+        # Clean up the extracted text
+        extracted_col = extracted_col.str.replace("\n", " ").str.strip_chars().fill_null("")
+        notes_df = notes_df.with_columns(pl.col(extracted_col).alias(key))
+
+    # Filter out rows with missing main information
+    filter_condition = (
+        (pl.col("chief_complaint") != "") |
+        (pl.col("present_illness") != "") |
+        (pl.col("medical_history") != "")
+    )
+    notes_df = notes_df.filter(filter_condition)
+
+    # Combine the sections into a single column with headers
+    combined_text = (
+        "CHIEF COMPLAINT: " + pl.col("chief_complaint") +
+        "\n\nPRESENT ILLNESS: " + pl.col("present_illness") +
+        "\n\nMEDICAL HISTORY: " + pl.col("medical_history") +
+        "\n\nMEDICATION ON ADMISSION: " + pl.col("medication_adm") +
+        "\n\nALLERGIES: " + pl.col("allergies") +
+        "\n\nPHYSICAL EXAM: " + pl.col("physical_exam") +
+        "\n\nFAMILY HISTORY: " + pl.col("family_history") +
+        "\n\nSOCIAL HISTORY: " + pl.col("social_history")
+    )
+    notes_df = notes_df.with_columns(combined_text.alias(TEXT_ADMISSION_COLUMN))
+    return notes_df
