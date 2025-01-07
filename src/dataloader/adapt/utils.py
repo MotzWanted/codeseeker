@@ -189,6 +189,22 @@ def shuffle_classes(
     return shuffled_keys, shuffled_values, shuffled_targets
 
 
+def sort_classes_alphabetically(
+    classes: dict[str, str], targets: list[list[str]], seed: int
+        ) -> tuple[list[str], list[str]]:
+    """Sort classes alphabetically."""
+    sorted_keys = sorted(classes.keys())
+    sorted_values = [classes[key] for key in sorted_keys]
+    id_to_sorted_index = {key: index for index, key in enumerate(sorted_keys, start=1)}
+    sorted_targets = []
+    for inner_list in targets:
+        if inner_list:
+            sorted_targets.append([id_to_sorted_index[key] for key in inner_list])
+        else:
+            sorted_targets.append([0])
+    return sorted_keys, sorted_values, sorted_targets
+
+
 def create_labels(
     segments: list[Segment],
     targets: list[int | str],
