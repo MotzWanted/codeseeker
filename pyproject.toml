@@ -25,7 +25,6 @@ dependencies = [
     "stackprinter>=0.2.12",
     "outlines>=0.1.11",
     "throughster",
-    "wandb>=0.19.1",
 ]
 
 [dependency-groups]
