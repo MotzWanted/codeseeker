@@ -9,6 +9,7 @@ import rich
 from dataloader import meddec, snomed, mdace_inpatient
 import dataloader
 from dataloader.base import DatasetConfig
+from dataloader import mimiciv
 from segmenters.base import factory
 
 
@@ -28,7 +29,7 @@ def my_loader(
     )
 
 
-SEGMENTER = factory("spacy", spacy_model="en_core_web_lg")
+SEGMENTER = factory("document", spacy_model="en_core_web_lg")
 
 DATASET_CONFIGS = {
     "meddec": {
@@ -57,15 +58,51 @@ DATASET_CONFIGS = {
         "split": "test",
         "options": {"segmenter": SEGMENTER},
     },
-    "mdace-icd10-3": {
-        "identifier": "mdace-icd10",
+    "mdace-icd10cm-3.0": {
+        "identifier": "mdace-icd10cm-3.0",
         "name_or_path": mdace_inpatient,
-        "subsets": ["icd10-diagnosis", "icd10-procedure"],
+        "subsets": ["icd10cm-3.0"],
         "split": "test",
         "options": {"segmenter": SEGMENTER},
     },
+    "mdace-icd10cm-3.1": {
+        "identifier": "mdace-icd10cm-3.1",
+        "name_or_path": mdace_inpatient,
+        "subsets": ["icd10cm-3.1"],
+        "split": "test",
+        "options": {"segmenter": SEGMENTER},
+    },
+    "mdace-icd10cm-3.2": {
+        "identifier": "mdace-icd10cm-3.2",
+        "name_or_path": mdace_inpatient,
+        "subsets": ["icd10cm-3.2"],
+        "split": "test",
+        "options": {"segmenter": SEGMENTER},
+    },
+    "mdace-icd10cm-3.3": {
+        "identifier": "mdace-icd10cm-3.3",
+        "name_or_path": mdace_inpatient,
+        "subsets": ["icd10cm-3.3"],
+        "split": "test",
+        "options": {"segmenter": SEGMENTER},
+    },
+    "mdace-icd10cm-3.4": {
+        "identifier": "mdace-icd10cm-3.4",
+        "name_or_path": mdace_inpatient,
+        "subsets": ["icd10cm-3.4"],
+        "split": "test",
+        "options": {"segmenter": SEGMENTER},
+    },
+    "mimic-iv": {
+        "identifier": "mimic-iv",
+        "name_or_path": mimiciv,
+        "split": "test",
+        "subsets": ["icd10-3.4"],
+        "options": {"segmenter": SEGMENTER, "negatives": 100, "hard_negatives": 1.0},
+    },
     "my_data": {
         "identifier": "my_data",
+        "name_or_path": my_loader,
         "path": my_loader,
     },
 }
@@ -74,7 +111,7 @@ DATASET_CONFIGS = {
 class Arguments(BaseSettings):
     """Arguments for the script."""
 
-    name: str = "mdace-diagnosis"
+    name: str = "mimic-iv"
 
     model_config = SettingsConfigDict(cli_parse_args=True, frozen=True)
 
