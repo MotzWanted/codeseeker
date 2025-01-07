@@ -38,10 +38,10 @@ class HfAlignment(HfOperation):
             for key, value in alignment_data.items():
                 output[key].append(value)
 
-            labels_matrix = None
-            if "labels" in batch and batch["labels"][i]:
-                labels_matrix = list2matrix(len(batch["segments"][i]), len(batch["entities"][i]), batch["labels"][i])
-            output["labels_matrix"].append(labels_matrix)
+            targets_matrix = None
+            if "targets" in batch and batch["targets"][i]:
+                targets_matrix = list2matrix(len(batch["segments"][i]), len(batch["classes"][i]), batch["targets"][i])
+            output["targets_matrix"].append(targets_matrix)
 
         return {
             **batch,
@@ -54,7 +54,7 @@ class HfAlignment(HfOperation):
 
     def _validate_input(self, batch: dict[str, list[typ.Any]]) -> None:
         """Validate the input batch."""
-        for key in ["classes", "segments"]:
+        for key in ["classes", "segments", "targets"]:
             if key not in batch:
                 raise ValueError(f"Missing key: {key}. Available keys: {batch.keys()}")
             if key and not isinstance(batch[key], list):

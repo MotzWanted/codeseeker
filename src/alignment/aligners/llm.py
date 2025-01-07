@@ -10,21 +10,49 @@ from jinja2 import Environment, FileSystemLoader
 from loguru import logger
 import numpy as np
 from prompt_poet import Prompt
+import pydantic
 
 from alignment.base import Aligner, matrix2list
 from alignment.models import Alignment, AlignmentSingleton
 
-from throughster import ModelInterface
+from throughster import ModelInterface, VllmOpenAiInterface
 from throughster.core.models import BaseResponse, LogProbs, ResponseChoice
-from throughster.vllm.client import VllmOpenAiInterface
 from throughster.core.errors import StructuredResponseError
 
 PATH_TO_TEMPLATES = Path(__file__).parent / "templates"
 
 
+class ReasoningModel(pydantic.BaseModel):
+    """Class representing the document indices that substantiates a given fact."""
+
+    chain_of_thought: str = pydantic.Field(..., description="The chain of thought.", max_length=1000)
+    code_ids: typ.List[int] = pydantic.Field(
+        ...,
+        description="A list of ids that support the hypothesis. If no documents supports the hypothesis, return a zero list.",  # noqa: E501
+        max_length=20,
+    )
+
+    @pydantic.field_validator("code_ids", mode="before")
+    @classmethod
+    def validate_indices(cls: type["ReasoningModel"], v: typ.List[int]) -> typ.List[int]:
+        """Validate labels."""
+        if len(v) == 0 or (len(v) > 1 and 0 in v):
+            v = [0]
+        v = list(set(v))
+        return v
+
+
 def custom_tojson(value):
     # Use json.dumps with ensure_ascii=False to avoid unnecessary escaping
-    return json.dumps(value, ensure_ascii=False)
+    def sanitize_value(val):
+        # Recursively sanitize strings within nested structures
+        if isinstance(val, str):
+            # Replace non-printable characters with a space
+            return re.sub(r"[^\x20-\x7E]", " ", val)
+        return val
+
+    sanitized_value = sanitize_value(value)
+    return json.dumps(sanitized_value, ensure_ascii=False)
 
 
 class LLMAligner(Aligner):
@@ -105,13 +133,110 @@ class LLMAligner(Aligner):
             return prompt.messages
         return prompt.string
 
+    def parse_response(self, preds: list[int], probs: list[float], classes: list[str]) -> tuple[np.ndarray, np.ndarray]:
+        """Parse the response and return the alignment."""
+        sparse_vector = np.zeros(len(classes))
+        probs_vector = np.zeros(len(classes))
+        for i, _ in enumerate(classes, start=1):
+            if i not in preds:
+                continue
+            sparse_vector[i - 1] = 1
+            probs_vector[i - 1] = probs[preds.index(i)]
+        return sparse_vector, probs_vector
+
+    def _lookup_logprobs(self, logprobs: LogProbs, classes_size: int) -> LogProbs:
+        """Based on a list of tokens we need to find logprobs of those tokens that represent the alignment predictions.
+        We are looking for numeric tokens and the token "[]" which represents the absence of an alignment ("[0]").
+        """
+        _logprobs = logprobs.model_copy()
+        valid_indices = [
+            i for i, token in enumerate(logprobs.tokens) if self._is_predicted_alignment(token, classes_size)
+        ]
+
+        _logprobs.text_offset = [logprobs.text_offset[i] for i in valid_indices]
+        _logprobs.token_logprobs = [logprobs.token_logprobs[i] for i in valid_indices]
+        _logprobs.tokens = [logprobs.tokens[i] for i in valid_indices]
+        _logprobs.top_logprobs = [
+            self._lookup_top_logprobs(logprobs.top_logprobs[i], classes_size) for i in valid_indices
+        ]
+
+        return _logprobs
+
+    def _lookup_top_logprobs(self, top_logprobs: dict[str, float], classes_size: int) -> dict[str, float]:
+        return {k: v for k, v in top_logprobs.items() if self._is_predicted_alignment(k, classes_size)}
+
+    @staticmethod
+    def _is_predicted_alignment(token: str, classes_size: int) -> bool:
+        return (token.isdigit() and int(token) < classes_size) or "[]" in token
+
+
+class UnconstrainedLLMAligner(LLMAligner):
+    """A LLM-based Alignment model applying long-context retrieval."""
+
+    PARSING_REGEX = r"\d+(?:,\d+){0,19}"
+
+    async def generate_alignments(self, client, classes, segments, fewshots):
+        """Generate an alignment for a task."""
+        requests = [self.format_request(client, classes=classes, segment=s, fewshots=fewshots) for s in segments]
+        responses: list[BaseResponse] = await client.batch_call(requests=requests)
+        results = []
+        for response in responses:
+            preds, probs = self.compress_choices(response.choices, classes_size=len(classes) + 1)
+            sparse_vector, probs_vector = self.parse_response(preds, probs, classes)
+            results.append((sparse_vector, probs_vector))
+        return results
+
+    def format_request(
+        self, client: ModelInterface, segment: str, classes: list[str], fewshots: list[dict[str, typ.Any]]
+    ) -> dict[str, typ.Any]:
+        """Predict the true/false alignment."""
+        prompt_template = self.format_prompt_with_shots(fewshots, segment=segment, classes=classes)
+        prompt = self.prompt_messages_or_string(client, prompt_template)
+        return {
+            "prompt": prompt,
+            "seed": self.seed,
+            **self.sampling_params,
+        }
+
+    def compress_choices(self, choices: list[ResponseChoice], classes_size: int) -> tuple[list[int], list[float]]:
+        """Compress the choices into a prediction and probability by a majority vote and by averaging the probabilities.
+        NOTE: Figure out how to average predictions across choices. Conformal prediction?
+        """
+        c = choices[0]
+        preds = re.findall(self.PARSING_REGEX, c.content)
+        probs = [0.0] * len(preds)
+        if c.logprobs:
+            logprobs = self._lookup_logprobs(c.logprobs, classes_size)
+            preds = [int(token) if token.isdigit() else 0 for token in logprobs.tokens]
+            if not preds:
+                logger.info(
+                    f"Could not find any relevant tokens in logprobs for the predicted tokens: {c.logprobs.tokens}."
+                )
+                logger.info("Using logprobs -0.01 instead.")
+                preds = [0]
+            top_logprobs = np.array([list(top_logprobs.values()) for top_logprobs in logprobs.top_logprobs])
+            if top_logprobs.size == 0:
+                logger.info(
+                    f"Could not find any relevant tokens in top logprobs for the predicted tokens: {c.logprobs.tokens}."
+                )
+                logger.info("Using logprobs -0.01 instead.")
+                top_logprobs = np.array([[-0.01] * len(preds)])
+            norm_top_probs = self.normalized_exp_values(top_logprobs, axis=-1)
+            probs = np.max(norm_top_probs, axis=-1)
+
+        if len(preds) != len(probs):
+            raise ValueError("Predictions and probabilities are not of the same length.")
+
+        return preds, probs
+
 
 class StructuredLLMAligner(LLMAligner):
     """A LLM-based Alignment model applying long-context retrieval."""
 
-    def __init__(self, max_attempts: int = 1, *args, **kwargs):
+    def __init__(self, max_attempts: int = 1, schema: pydantic.BaseModel = ReasoningModel, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.max_attempts = max_attempts
+        self.schema = schema
 
     async def predict(
         self, client: ModelInterface, classes: list[str], segments: list[str], fewshots: list | None = [], **kwargs
@@ -130,29 +255,19 @@ class StructuredLLMAligner(LLMAligner):
         """Generate an alignment for a task."""
         requests = [self.format_request(client, classes=classes, segment=s, fewshots=fewshots) for s in segments]
         responses: list[BaseResponse] = await client.structured_batch_call(
-            requests=requests, schema=AlignmentSingleton, max_attempts=self.max_attempts
+            requests=requests, schema=self.schema, max_attempts=self.max_attempts
         )
         results = []
         for response in responses:
             if isinstance(response, (StructuredResponseError, type(None))):
                 # If the response is an error, return a zero prediction
+                logger.info("Could not parse the json response.")
                 results.append((np.zeros(len(classes)), np.zeros(len(classes))))
                 continue
             preds, probs = self.compress_choices(response.choices, classes_size=len(classes) + 1)
             sparse_vector, probs_vector = self.parse_response(preds, probs, classes)
             results.append((sparse_vector, probs_vector))
         return results
-
-    def parse_response(self, preds: list[int], probs: list[float], classes: list[str]) -> tuple[np.ndarray, np.ndarray]:
-        """Parse the response and return the alignment."""
-        sparse_vector = np.zeros(len(classes))
-        probs_vector = np.zeros(len(classes))
-        for i, _ in enumerate(classes, start=1):
-            if i not in preds:
-                continue
-            sparse_vector[i - 1] = 1
-            probs_vector[i - 1] = probs[preds.index(i)]
-        return sparse_vector, probs_vector
 
     def format_request(
         self, client: ModelInterface, segment: str, classes: list[str], fewshots: list[dict[str, typ.Any]]
@@ -172,7 +287,7 @@ class StructuredLLMAligner(LLMAligner):
         NOTE: Figure out how to average predictions across choices. Conformal prediction?
         """
         c = choices[0]
-        preds = c.validated_schema.ids or [  # type: ignore
+        preds = c.validated_schema.code_ids or [  # type: ignore
             int(token) if self._is_predicted_alignment(token, classes_size) else 0.0
             for token in c.content.split()  # type: ignore
         ]
@@ -201,38 +316,164 @@ class StructuredLLMAligner(LLMAligner):
 
         return preds, probs
 
-    @staticmethod
-    def _is_predicted_alignment(token: str, classes_size: int) -> bool:
-        return (token.isdigit() and int(token) < classes_size) or "[]" in token
 
-    def _lookup_logprobs(self, logprobs: LogProbs, classes_size: int) -> LogProbs:
-        """Based on a list of tokens we need to find logprobs of those tokens that represent the alignment predictions.
-        We are looking for numeric tokens and the token "[]" which represents the absence of an alignment ("[0]").
+class ReasoningLLMAligner(LLMAligner):
+    """A LLM-based Alignment model applying long-context retrieval."""
+
+    REASONING_PROMPT = "icdcm_cot"
+    ANSWER_PROMPT = "icdcm_cot_answer"
+    REGEX_PATTERN = r"\[(?:[1-9]\d{0,3})(?:,(?:[1-9]\d{0,3})){0,19}\]\n"
+
+    def __init__(
+        self, prompt_name: str, num_shots: int, token_limit: int, seed: int, sampling_params: dict[str, typ.Any]
+    ):
+        env = Environment(loader=FileSystemLoader(PATH_TO_TEMPLATES))
+        loader = typ.cast(FileSystemLoader, env.loader)
+        self.reasoning_template, self.reasoning_template_path, _ = loader.get_source(
+            env, f"{self.REASONING_PROMPT}.yml.j2"
+        )
+        self.raw_template, self.answer_template_path, _ = loader.get_source(env, f"{self.ANSWER_PROMPT}.yml.j2")
+        self.prompt_name = prompt_name
+        self.num_shots = num_shots
+        self.token_limit = token_limit
+        self.seed = seed
+        self.sampling_params = sampling_params
+
+    async def predict(
+        self, client: ModelInterface, classes: list[str], segments: list[str], fewshots: list | None = [], **kwargs
+    ) -> Alignment:
+        """Align a list of classes elements to a set of segments."""
+        fewshots = []
+        return await super().predict(client=client, classes=classes, segments=segments, fewshots=fewshots)
+
+    async def generate_alignments(
+        self, client: ModelInterface, classes: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
+        """Generate an alignment for a task."""
+        first_requests = [
+            self.format_first_request(client, classes=classes, segment=s, fewshots=fewshots) for s in segments
+        ]
+        first_responses: list[BaseResponse] = await client.batch_call(requests=first_requests)
+        reasoning: list[str] = [r.choices[0].content for r in first_responses]
+        second_requests = [
+            self.format_second_request(client, classes=classes, segment=s, reasoning=r, fewshots=fewshots)
+            for s, r in zip(segments, reasoning)
+        ]
+        second_responses: list[BaseResponse] = await client.batch_call(requests=second_requests)
+        results = []
+        for response in second_responses:
+            try:
+                # icd_list = response.choices[0].content.split("The final ICD codes are: ")[-1]
+                ast.literal_eval(response.choices[0].content)
+            except ValueError:
+                # If the response is an error, return a zero prediction
+                logger.info("Could not parse the response list.")
+                results.append((np.zeros(len(classes)), np.zeros(len(classes))))
+                continue
+            preds, probs = self.compress_choices(response.choices, classes_size=len(classes) + 1)
+            sparse_vector, probs_vector = self.parse_response(preds, probs, classes)
+            results.append((sparse_vector, probs_vector))
+        return results
+
+    def format_first_request(
+        self, client: ModelInterface, segment: str, classes: list[str], fewshots: list[dict[str, typ.Any]]
+    ) -> dict[str, typ.Any]:
+        """Predict the true/false alignment."""
+        prompt_template = self.format_reasoning_prompt(
+            template_data={"segment": segment, "classes": classes, "custom_tojson": custom_tojson}, truncation_step=1
+        )
+        prompt = self.prompt_messages_or_string(client, prompt_template)
+        return {
+            "prompt": prompt,
+            "seed": self.seed,
+            "max_tokens": 250,
+            **self.sampling_params,
+        }
+
+    def format_second_request(
+        self,
+        client: ModelInterface,
+        segment: str,
+        classes: list[str],
+        reasoning: str,
+        fewshots: list[dict[str, typ.Any]],
+    ) -> dict[str, typ.Any]:
+        """Predict the true/false alignment."""
+        prompt_template = self.format_answer_prompt(
+            template_data={
+                "segment": segment,
+                "classes": classes,
+                "reasoning": reasoning,
+                "custom_tojson": custom_tojson,
+            },
+            truncation_step=1,
+        )
+        prompt = self.prompt_messages_or_string(client, prompt_template)
+        return {
+            "prompt": prompt,
+            "guided_regex": self.REGEX_PATTERN,
+            "seed": self.seed,
+            "stop": ["\n"],
+            **self.sampling_params,
+        }
+
+    def format_answer_prompt(self, template_data: dict[str, typ.Any], truncation_step: int = 1) -> Prompt:
+        """Format the prompt."""
+        return Prompt(
+            raw_template=self.raw_template,
+            template_data=template_data,
+            token_limit=self.token_limit,
+            truncation_step=truncation_step,
+        )
+
+    def format_reasoning_prompt(self, template_data: dict[str, typ.Any], truncation_step: int = 1) -> Prompt:
+        """Format the prompt."""
+        return Prompt(
+            raw_template=self.reasoning_template,
+            template_data=template_data,
+            token_limit=self.token_limit,
+            truncation_step=truncation_step,
+        )
+
+    def compress_choices(self, choices: list[ResponseChoice], classes_size: int) -> tuple[list[int], list[float]]:
+        """Compress the choices into a prediction and probability by a majority vote and by averaging the probabilities.
+        NOTE: Figure out how to average predictions across choices. Conformal prediction?
         """
-        _logprobs = logprobs.model_copy()
-        valid_indices = [
-            i for i, token in enumerate(logprobs.tokens) if self._is_predicted_alignment(token, classes_size)
-        ]
+        c = choices[0]
+        icd_list = c.content.split("The final ICD codes are: ")[-1]
+        preds = ast.literal_eval(icd_list)
+        probs = [0.0] * len(preds)
+        if c.logprobs:
+            logprobs = self._lookup_logprobs(c.logprobs, classes_size)
+            preds = [int(token) if token.isdigit() else 0 for token in logprobs.tokens]
+            if not preds:
+                logger.info(
+                    f"Could not find any relevant tokens in logprobs for the predicted tokens: {c.logprobs.tokens}."
+                )
+                logger.info("Using logprobs -0.01 instead.")
+                preds = [0]
+            top_logprobs = np.array([list(top_logprobs.values()) for top_logprobs in logprobs.top_logprobs])
+            if top_logprobs.size == 0:
+                logger.info(
+                    f"Could not find any relevant tokens in top logprobs for the predicted tokens: {c.logprobs.tokens}."
+                )
+                logger.info("Using logprobs -0.01 instead.")
+                top_logprobs = np.array([[-0.01] * len(preds)])
+            norm_top_probs = self.normalized_exp_values(top_logprobs, axis=-1)
+            probs = np.max(norm_top_probs, axis=-1)
 
-        _logprobs.text_offset = [logprobs.text_offset[i] for i in valid_indices]
-        _logprobs.token_logprobs = [logprobs.token_logprobs[i] for i in valid_indices]
-        _logprobs.tokens = [logprobs.tokens[i] for i in valid_indices]
-        _logprobs.top_logprobs = [
-            self._lookup_top_logprobs(logprobs.top_logprobs[i], classes_size) for i in valid_indices
-        ]
+        if len(preds) != len(probs):
+            raise ValueError("Predictions and probabilities are not of the same length.")
 
-        return _logprobs
-
-    def _lookup_top_logprobs(self, top_logprobs: dict[str, float], classes_size: int) -> dict[str, float]:
-        return {k: v for k, v in top_logprobs.items() if self._is_predicted_alignment(k, classes_size)}
+        return preds, probs
 
 
 class RegexLLMAligner(StructuredLLMAligner):
     """A LLM-based Alignment model applying long-context retrieval."""
 
     # LIST_REGEX_PATTERN = r"\[\s*\d+\s*(,\s*\d+\s*){0,20}\]"
-    ICD_CODE_LIST = r"\[\d+(,\d+){0,19}\]\n"
-    REASONING_PATTERN = r'Answer: T[\w \\",\\.]{30,250}. The final ICD codes are: ' + ICD_CODE_LIST
+    ICD_CODE_LIST = r"\[(?:[1-9]\d{0,3})(?:,(?:[1-9]\d{0,3})){0,19}\]\n"
+    REASONING_PATTERN = r'Answer: [A-Z][\w \\",\\.]{30,1000}. The final selected ICD codes are: ' + ICD_CODE_LIST
 
     def __init__(self, regex_pattern: re.Pattern = ICD_CODE_LIST, max_attempts: int = 5, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -243,13 +484,15 @@ class RegexLLMAligner(StructuredLLMAligner):
         self, client: ModelInterface, classes: list[str], segments: list[str], fewshots: list[dict[str, typ.Any]]
     ) -> list[tuple[np.ndarray, np.ndarray]]:
         """Generate an alignment for a task."""
+        if isinstance(segments, str):
+            segments = [segments]
         requests = [self.format_request(client, classes=classes, segment=s, fewshots=fewshots) for s in segments]
         responses: list[BaseResponse] = await client.batch_call(requests=requests)
         results = []
         for response in responses:
             try:
-                icd_list = response.choices[0].content.split("The final ICD codes are: ")[-1]
-                ast.literal_eval(icd_list)
+                # icd_list = response.choices[0].content.split("The final ICD codes are: ")[-1]
+                ast.literal_eval(response.choices[0].content)
             except ValueError:
                 # If the response is an error, return a zero prediction
                 logger.info("Could not parse the response list.")
@@ -380,8 +623,33 @@ def create_llm_aligner(
             seed=seed,
             sampling_params=sampling_params,
         )
+    elif aligner_type == "unconstrained":
+        return UnconstrainedLLMAligner(
+            prompt_name=prompt_name,
+            num_shots=num_shots,
+            token_limit=token_limit,
+            seed=seed,
+            sampling_params=sampling_params,
+        )
     elif aligner_type == "regex":
         return RegexLLMAligner(
+            prompt_name=prompt_name,
+            num_shots=num_shots,
+            token_limit=token_limit,
+            seed=seed,
+            sampling_params=sampling_params,
+        )
+    elif aligner_type == "cot-regex":
+        return RegexLLMAligner(
+            regex_pattern=RegexLLMAligner.REASONING_PATTERN,
+            prompt_name=prompt_name,
+            num_shots=num_shots,
+            token_limit=token_limit,
+            seed=seed,
+            sampling_params=sampling_params,
+        )
+    elif aligner_type == "reasoning":
+        return ReasoningLLMAligner(
             prompt_name=prompt_name,
             num_shots=num_shots,
             token_limit=token_limit,

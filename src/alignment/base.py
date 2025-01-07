@@ -11,7 +11,7 @@ def list2matrix(dim_x: int, dim_y: int, alignment_indices: list[list[int | float
         for pred in preds:
             pred_sign = -1 if pred < 0 else 1
             pred_idx = abs(pred) - 1
-            if 0 <= pred_idx < dim_x:
+            if 0 <= pred_idx < dim_y:
                 sparse_matrix[i, pred_idx] = pred_sign
     return sparse_matrix
 
