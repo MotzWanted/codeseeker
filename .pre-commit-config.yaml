@@ -22,10 +22,8 @@ repos:
     rev: v1.5.0
     hooks:
     -   id: yesqa  # Check if there are any unnecessary 'noqa' comments in the code.
--   repo: https://github.com/python-poetry/poetry
-    rev: 1.8.3
-    hooks:
-    -   id: poetry-check  # Validate the pyproject.toml file.
-    -   id: poetry-lock  # Lock dependencies on changes to the pyproject.toml.
-        args: [ --no-update ]  # Do not update any dependencies if they are matched between lock and pyproject.toml.
-    -   id: poetry-install  # Install dependencies from the lock file on checkout and merge.
+- repo: https://github.com/astral-sh/uv-pre-commit
+  # uv version.
+  rev: 0.5.8
+  hooks:
+    - id: uv-lock  # Lock dependencies on changes to the pyproject.toml.

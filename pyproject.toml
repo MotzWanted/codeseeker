@@ -1,254 +1,155 @@
-[tool.poetry]
+[project]
 name = "entityseeker"
 version = "0.1.0"
 description = "Clinical Entity Linking with Large Language Models"
-authors = ["Andreas Geert Motzfeldt <amo@corti.ai>", "Valentin Liévin <vli@corti.ai>"]
 readme = "README.md"
-
-packages = [
-    { include = 'alignment', from = 'src'},
-    { include = 'segmenters', from = 'src'},
-    { include = 'dataloader', from = 'src'},
-    { include = 'finetune', from = 'src'},
-    { include = 'frontend', from = 'src'}
+requires-python = ">=3.11,<3.13"
+authors = [
+    { name = "Andreas Geert Motzfeldt", email = "amo@corti.ai" },
+    { name = "Valentin Liévin", email = "vli@corti.ai" }
+]
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2.1",
+    "loguru>=0.7.2",
+    "transformers>=4.45.2",
+    "torch<=2.4.0",
+    "lightning>=2.1.2",
+    "numba>=0.60.0",
+    "peft>=0.7.1",
+    "prompt-poet>=0.0.40",
+    "tiktoken>=0.7.0",
+    "mlflow>=2.15.1",
+    "pyahocorasick>=2.1.0",
+    "stackprinter>=0.2.12",
+    "outlines>=0.1.11",
+    "throughster",
 ]
 
-[tool.poe.tasks]
-# Train alignment model (Mistral for prod, OPT for debugging)
-train-align = "python -m scripts.train_alignment"
-train-align-debug = "python -m scripts.train_alignment --backbone=facebook/opt-125m --quantize=none --ckpt=0 --micro_batch_size=4 --eval_freq=10 --generate_freq=20 --peft=none --max_length=510 --max_new_tokens=12"
-# Spawn vLLM servers - set `--model_name=<path-to-exported-model>` to run your own fine-tuned model
-spawn-vllm = "python -m scripts.spawn_vllms"
+[dependency-groups]
+dataloader = [
+    "datasets<2.21.0",
+    "polars>=1.15.0",
+    "intervaltree>=3.1.0",
+    "spacy>=2.2.0,<4.0.0",
+]
 
+dev = [
+    "rich>=13.7.0",
+    "ruff>=0.1.8",
+    "ipykernel>=6.28.0",
+    "jupyter>=1.0.0",
+    "stackprinter>=0.2.11",
+    "ipython>=8.26.0",
+    "seaborn>=0.13.2",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.11,<3.13"
-pydantic = "^2.7"
-pydantic-settings = "^2.2.1"
-loguru = "^0.7.2"
-transformers = "^4.45.2"
-torch = "<2.4.0"
-lightning = "^2.1.2"
-numba = "^0.60.0"
-peft = "^0.7.1"
-poethepoet = "^0.24.4"
-intervaltree = "^3.1.0"
-prompt-poet = "^0.0.40"
-weave = "^0.50.14"
-tiktoken = "^0.7.0"
-mlflow = "^2.15.1"
-spacy = "<=3.7.6"
-pyahocorasick = "^2.1.0"
-seaborn = "^0.13.2"
-stackprinter = "^0.2.12"
-throughster = { git = 'git@github.com:MotzWanted/throughster.git', branch = 'dev'}
+test = [
+    "pre-commit>=3.4.0",
+    "pytest>=7.4.3",
+]
 
-[tool.poetrygroup.dataloader]
-optional = false
+[project.optional-dependencies]
+frontend = [
+    "flask[async]>=3.0.3",
+    "gunicorn>=22.0.0",
+]
+gpu = [
+    "bitsandbytes>=0.43.2",
+    "flash-attn<=2.6.2",
+]
 
-[tool.poetry.group.dataloader.dependencies]
-datasets = "^2.20.0"
-polars = "^1.15.0"
+[tool.uv]
+default-groups = ["dev", "dataloader", "test"]
+no-build-isolation-package = ["flash-attn"]
 
-
-[tool.poetry.group.frontend]
-optional = true
-
-[tool.poetry.group.frontend.dependencies]
-flask = { version = "^3.0.3", extras = ["async"] }
-gunicorn = "^22.0.0"
-
-[tool.poetry.group.demo]
-optional = true
-
-[tool.poetry.group.demo.dependencies]
-uvicorn = "^0.25.0"
-aiocache = "^0.12.2"
-flask = { version = "^3.0.3", extras = ["async"] }
-
-[tool.poetry.group.gpu]
-optional = true
-
-[tool.poetry.group.gpu.dependencies]
-bitsandbytes = "^0.42.0"
-flash-attn = "^2.4.2"
-
-[tool.poetry.group.dev]
-optional = true
-
-[tool.poetry.group.dev.dependencies]
-rich = "^13.7.0"
-ruff = "^0.1.8"
-ipykernel = "^6.28.0"
-jupyter = "^1.0.0"
-stackprinter = "^0.2.11"
-ipython = "^8.26.0"
-[tool.poetry.group.test]
-optional = true
-
-[tool.poetry.group.test.dependencies]
-pre-commit = "^3.4.0"
-pytest = ">=7.4.3,<9.0.0"
+[tool.uv.sources]
+throughster =  { git = 'https://github.com/MotzWanted/throughster.git', branch = 'dev'}
 
 [build-system]
-requires = ["poetry-core", "torch==2.1.2"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.pyright]
-reportGeneralTypeIssues = false
-reportReturnType = false
-reportArgumentType = false
-reportPrivateImportUsage = false
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
 
 [tool.ruff]
-select = [
-  "E",   # pycodestyle
-  "F",   # pyflakes
-  "D",   # pydocstyle
-  "ANN", # flake8-annotations
-  "PL",  # pylint
-  "I",   # isort
-  "B",   # flake8-bugbear
-  "N",   # pep8-naming
-  "C",   # mccabe
-  "S",   # flake8-bandit
-  "G",   # flake8-logging-format
-  "DTZ", # flake8-datetimez
-  "ICN", # flake8-import-conventions
-  "RET", # flake8-return
-  "SIM", # flake8-simplify
-  "TID", # flake8-tidy-imports
-  "PTH", # flake8-use-pathlib
-  "ARG", # flake8-unused-arguments
-]
-
-ignore = [
-  "D100",    # undocumented-public-module
-  "D104",    # undocumented-public-package
-  "D105",    # undocumented-magic-method
-  "D107",    # undocumented-public-init
-  "ANN101",  # missing-type-self
-  "ANN204",  # missing-return-type-special-method
-  "B905",    # zip-without-explicit-strict
-  "PLC1901", # compare-to-empty-string
-  "PTH123",  # builtin-open
-  "RET504",  # unnecessary-assign
-  "N812",    # lowercase-underscore
-  "D206",    # no-docstring-on-init
-  "E501",    # line-too-long
-]
-
-# Allow autofix for all enabled rules (when `--fix`) is provided.
-fixable = [
-  "A",   # flake8-builtins
-  "B",   # flake8-bugbear
-  "C",   # mccabe
-  "D",   # pydocstyle
-  "E",   # pycodestyle error
-  "F",   # Pyflakes
-  "G",   # flake8-logging-format
-  "I",   # isort
-  "N",   # pep8-naming
-  "Q",   # flake8-quotes
-  "S",   # flake8-bandit
-  "T",   # pycodestyle
-  "W",   # pycodestyle warning
-  "ANN", # flake8-annotations
-  "ARG", # flake8-unused-arguments
-  "BLE", # flake8-blind-except
-  "COM", # flake8-commas
-  "DJ",  # flake8-django
-  "DTZ", # flake8-datetimez
-  "EM",  # flake8-errmsg
-  "ERA", # eradicate
-  "EXE", # flake8-executable
-  "FBT", # flake8-boolean-trap
-  "ICN", # flake8-import-conventions
-  "INP", # flake8-no-pep420
-  "ISC", # flake8-implicit-str-concat
-  "NPY", # NumPy-specific rules
-  "PD",  # pandas-vet
-  "PGH", # pygrep-hooks
-  "PIE", # flake8-pie
-  "PL",  # Pylint
-  "PT",  # flake8-pytest-style
-  "PTH", # flake8-use-pathlib
-  "PYI", # flake8-pyi
-  "RET", # flake8-return
-  "RSE", # flake8-raise
-  "RUF", # Ruff-specific rules
-  "SIM", # flake8-simplify
-  "SLF", # flake8-self
-  "TCH", # flake8-type-checking
-  "TID", # flake8-tidy-imports
-  "TRY", # tryceratops
-  "UP",  # pyupgrade
-  "YTT", # flake8-2020
-]
-unfixable = []
-
-# Exclude a variety of commonly ignored directories.
-exclude = [
-  ".bzr",
-  ".direnv",
-  ".eggs",
-  ".git",
-  ".hg",
-  ".mypy_cache",
-  ".nox",
-  ".pants.d",
-  ".pytype",
-  ".ruff_cache",
-  ".svn",
-  ".tox",
-  ".venv",
-  "__pypackages__",
-  "_build",
-  "buck-out",
-  "build",
-  "dist",
-  "node_modules",
-  "venv",
-]
-
-# don't remove unsued imports from __init__.py files
-ignore-init-module-imports = true
-
 line-length = 120
-
-# Allow unused variables when underscore-prefixed.
-dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
-
-# Assume Python 3.11.
 target-version = "py311"
 
-[tool.ruff.per-file-ignores]
-"*/__init__.py" = [
-  "F401", # unused-import
+[tool.ruff.lint]
+select = [
+    "F",
+    "E",
+    "W",
+    "C90",
+    "I",
+    "N",
+    "D",
+    "UP",
+    "YTT",
+    "ASYNC",
+    "S",
+    "BLE",
+    "B",
+    "A",
+    "COM",
+    "C4",
+    "DTZ",
+    "T10",
+    "DJ",
+    "EM",
+    "EXE",
+    "FA",
+    "ISC",
+    "ICN",
+    "LOG",
+    "PIE",
+    "PYI",
+    "PT",
+    "Q",
+    "RSE",
+    "RET",
+    "SLF",
+    "SLOT",
+    "SIM",
+    "TID",
+    "TCH",
+    "INT",
+    "ERA",
+    "PGH",
 ]
-"*/test*.py" = [
-  "S101",    # assert
-  "D102",    # undocumented-public-method
-  "D103",    # undocumented-public-function
-  "PLR2004", # magic-value-comparison
-
+ignore = [
+    "F821",
+    "F841",
+    "D100",
+    "D107",
+    "D211",
+    "D212",
+    "S301",
+    "S311",
+    "S603",
+    "S605",
+    "S607",
+    "B008",
+    "B028",
+    "B905",
+    "COM812",
+    "ISC001",
+    "TC003",
+]
+exclude = [
+    ".bzr", ".direnv", ".eggs", ".git", ".hg", ".mypy_cache", ".nox", ".pants.d", ".pytype", ".ruff_cache", ".svn",
+    ".tox", ".venv", "__pypackages__", "_build", "buck-out", "build", "dist", "node_modules", "venv",
 ]
 
-[tool.ruff.mccabe]
-# Unlike Flake8, default to a complexity level of 10.
-max-complexity = 10
-
-[tool.ruff.isort]
-split-on-trailing-comma = true
-
-[tool.ruff.pydocstyle]
+[tool.ruff.lint.pydocstyle]
 convention = "google"
 
-[tool.ruff.flake8-annotations]
-allow-star-arg-any = true
+[tool.codespell]
+skip = "*.pdf,*.ipynb,*.drawio,*.json"
+ignore-words-list = ["instanciate"]
 
-[tool.ruff.flake8-unused-arguments]
-ignore-variadic-names = true
+[tool.typos.default.extend-identifiers]
+arange = "arange"
 
-[tool.ruff.pylint]
-max-args = 8
+[tool.typos.default.extend-words]
+Ue = "Ue"
+Hashi = "Hashi"
