@@ -6,7 +6,7 @@ import torch
 import torch.distributed as dist
 
 
-class Agregator(abc.ABC, torch.nn.Module):
+class Aggregator(abc.ABC, torch.nn.Module):
     """Aggregates merics."""
 
     @abc.abstractmethod
@@ -26,7 +26,7 @@ class Agregator(abc.ABC, torch.nn.Module):
         """Synchronize all processes by summing stats."""
 
 
-class MeanAggregator(Agregator):
+class MeanAggregator(Aggregator):
     """Computes the mean."""
 
     _total: torch.Tensor
@@ -61,7 +61,7 @@ class MeanAggregator(Agregator):
         dist.all_reduce(self._count.data, op=dist.ReduceOp.SUM)
 
 
-class MaxAggregator(Agregator):
+class MaxAggregator(Aggregator):
     """Computes the max."""
 
     _max: torch.Tensor
@@ -92,7 +92,7 @@ class MaxAggregator(Agregator):
         dist.all_reduce(self._max.data, op=dist.ReduceOp.MAX)
 
 
-class SumAggregator(Agregator):
+class SumAggregator(Aggregator):
     """Computes the sum."""
 
     _sum: torch.Tensor
@@ -123,10 +123,43 @@ class SumAggregator(Agregator):
         dist.all_reduce(self._sum.data, op=dist.ReduceOp.SUM)
 
 
+class ClassAggregator(Aggregator):
+    """Aggregates metrics for individual classes."""
+
+    _sum: torch.Tensor
+
+    def __init__(self, num_classes: int) -> None:
+        super().__init__()
+        self.register_buffer("_sum", torch.zeros(num_classes))
+
+    def reset(self) -> None:
+        """Reset the metric stats for all classes."""
+        self._sum.zero_()
+
+    def update(self, values: torch.Tensor) -> None:
+        """Update the metrics stats for each class."""
+        values = values.detach()
+        values_no_nan = values[~torch.isnan(values)]
+        if values_no_nan.numel() == 0:
+            return
+        if self._sum.device != values.device:
+            values = values.to(self._sum.device)
+        self._sum += values
+
+    def get(self) -> torch.Tensor:
+        """Return the metric value averaged over all updates for each class."""
+        return self._sum.data.clone()
+
+    def all_reduce(self) -> None:
+        """Synchronize all processes by summing stats."""
+        if dist.is_initialized():
+            dist.all_reduce(self._sum, op=dist.ReduceOp.SUM)
+
+
 class Monitor(abc.ABC, torch.nn.Module):
     """Monitor retrieval performances."""
 
-    aggregators: typ.Mapping[str, Agregator]
+    aggregators: torch.nn.ModuleDict
 
     @abc.abstractmethod
     def update(self, **kws: typ.Any) -> None:

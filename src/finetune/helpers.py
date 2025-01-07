@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import pathlib
@@ -16,8 +17,10 @@ from peft import mapping as peft_mapping
 from peft import utils as peft_utils
 from peft.tuners import lora
 from transformers.generation import stopping_criteria as generate_stops
+from outlines.processors.base_logits_processor import OutlinesLogitsProcessor
+from outlines.models.transformers import TransformerTokenizer
 
-from finetune.monitor import MeanAggregator, Monitor, SumAggregator
+from finetune.monitor import ClassAggregator, MeanAggregator, Monitor
 
 from .callback import Callback
 
@@ -123,7 +126,7 @@ def init_and_wrap_optimizer(
     """Initialize the optimizer and scheduler."""
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     if use_paged_optim:
-        from bitsandbytes.optim import PagedAdamW
+        from bitsandbytes.optim import PagedAdamW  # type: ignore
 
         optimizer = PagedAdamW(trainable_params, lr=lr, weight_decay=weight_decay)
     else:
@@ -333,7 +336,7 @@ class PatternStoppingCriteria(generate_stops.StoppingCriteria):
         pattern_token_ids = [tokenizer.encode(p, add_special_tokens=False, return_tensors="pt") for p in patterns]
         self.pattern_token_ids: list[torch.LongTensor] = pattern_token_ids  # type: ignore
 
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs: typ.Any) -> bool:
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs: typ.Any) -> bool:  # type: ignore
         """Check if the generated sequence contains one of the patterns."""
         self.pattern_token_ids = [p.to(input_ids.device) for p in self.pattern_token_ids]  # type: ignore
         for pattern in self.pattern_token_ids:
@@ -349,19 +352,24 @@ class ClassificationMonitor(Monitor):
 
     def __init__(
         self,
-        keys: list[str],
-        tokenizer: transformers.PreTrainedTokenizerBase,
-        parse_labels_fn: typ.Callable[[str], set[int]],
+        classes: int,
+        keys: list[str] = [],
+        tokenizer: transformers.PreTrainedTokenizerBase | None = None,
     ) -> None:
         super().__init__()
         self.keys = keys
         self.tokenizer = tokenizer
-        self.parse_labels_fn = parse_labels_fn
+        self.classes = classes
+        self.class_aggregators = torch.nn.ModuleDict(
+            {
+                **{k: ClassAggregator(classes) for k in ["tp", "fp", "fn", "tn"]},
+            }
+        )
         self.aggregators = torch.nn.ModuleDict(
             {
-                **{k: SumAggregator() for k in ["tp", "fp", "fn", "tn", "pos_count", "neg_count"]},
-                **{k: MeanAggregator() for k in [*self.keys, "_hit"]},
-            }  # type: ignore
+                **{k: ClassAggregator(classes) for k in ["tp", "fp", "fn", "tn"]},
+                **{k: MeanAggregator() for k in [*self.keys, "_hit", "pos_ratio"]},
+            }
         )
 
     def get(self) -> dict[str, torch.Tensor]:
@@ -370,24 +378,36 @@ class ClassificationMonitor(Monitor):
         tp = self.aggregators["tp"].get()
         fp = self.aggregators["fp"].get()
         fn = self.aggregators["fn"].get()
-        tn = self.aggregators["tn"].get()
-        pos_targets = self.aggregators["pos_count"].get()
-        neg_targets = self.aggregators["neg_count"].get()
-        if tp == fp == fn == tn == 0:
-            return output
+
+        # Micro F1
+        micro_precision = tp.sum() / (tp.sum() + fp.sum() + 1e-10)
+        micro_recall = tp.sum() / (tp.sum() + fn.sum() + 1e-10)
+        output["f1_micro"] = 2 * (micro_precision * micro_recall) / (micro_precision + micro_recall + 1e-10)
+
+        # Macro F1 (ignoring TN-only classes)
+        precision_per_class = tp / (tp + fp + 1e-10)
+        recall_per_class = tp / (tp + fn + 1e-10)
+        f1_per_class = 2 * (precision_per_class * recall_per_class) / (precision_per_class + recall_per_class + 1e-10)
+
+        # Exclude classes where TP + FP + FN = 0 (TN-only classes)
+        valid_classes = (tp + fp + fn) > 0
+        if valid_classes.any():  # Ensure there are valid classes
+            macro_f1 = f1_per_class[valid_classes].mean()
+        else:
+            macro_f1 = torch.tensor(0.0)  # Handle edge case where no valid classes exist
+
+        output["f1_macro"] = macro_f1
+
+        # Classification Metrics
         output["accuracy"] = self.aggregators["_hit"].get()
-        output["precision"] = tp / (tp + fp)
-        output["recall"] = tp / (tp + fn)
-        output["f1"] = 2 * (output["precision"] * output["recall"]) / (output["precision"] + output["recall"])
-        output["pos_ratio"] = (tp + fp) / pos_targets
-        output["neg_ratio"] = (tn + fn) / neg_targets
+        output["positive_ratio"] = self.aggregators["pos_ratio"].get()
         return output
 
     def update(
         self,
         *,
-        target_input_ids: None | torch.Tensor = None,
-        preds_input_ids: None | torch.Tensor = None,
+        target_input_ids: None | torch.Tensor | list[set[int]] = None,
+        preds_input_ids: None | torch.Tensor | list[set[int]] = None,
         **kws: typ.Any,
     ) -> None:
         """Update the metrics."""
@@ -397,85 +417,58 @@ class ClassificationMonitor(Monitor):
         if target_input_ids is None or preds_input_ids is None:
             return
 
-        # Compute the true/false negatives/positives
-        conf_matrix = self._make_conf_matrix(
-            self.tokenizer,
-            target_input_ids,
-            preds_input_ids,
-            self.parse_labels_fn,
-        )
-        for k, v in conf_matrix.items():
-            self.aggregators[k].update(v)
+        if isinstance(target_input_ids, torch.Tensor) and isinstance(preds_input_ids, torch.Tensor):
+            target_tokens = self._tokenize_fn(self.tokenizer, target_input_ids)
+            preds_tokens = self._tokenize_fn(self.tokenizer, preds_input_ids)
+            preds_input_ids = self._parse_tokens_fn(preds_tokens)
+            target_input_ids = self._parse_tokens_fn(target_tokens)
 
-    @staticmethod
-    def _make_conf_matrix(
-        tokenizer: transformers.PreTrainedTokenizerBase,
-        target_ids: torch.Tensor,
-        generated_ids: torch.Tensor,
-        parse_labels_fn: typ.Callable[[str], set[int]],
-    ) -> dict[str, torch.Tensor]:
-        """Compute the true/false positives."""
-        preds_strs = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-        target_strs = tokenizer.batch_decode(target_ids, skip_special_tokens=True)
-        preds: list[set[int]] = [parse_labels_fn(x) for x in preds_strs]
-        targets: list[set[int]] = [parse_labels_fn(x) for x in target_strs]
+        prediction_matrix = list2tensor_vectorized(len(preds_input_ids), self.classes, preds_input_ids)
+        target_matrix = list2tensor_vectorized(len(target_input_ids), self.classes, target_input_ids)
 
         if os.environ.get("DEBUG", "0") == "1":
             import rich
 
             rich.print(
                 {
-                    "preds_strs": preds_strs,
-                    "target_strs": target_strs,
+                    "predictions": preds_input_ids,
+                    "targets": target_input_ids,
                 }
             )
 
-        def _tp(pred: set[int], target: set[int]) -> int:
-            """True positives."""
-            if target == {0}:
-                return 0
-            return len(pred & target)
+        # Compute the true/false negatives/positives
+        conf_matrix = self._make_conf_matrix(target_matrix, prediction_matrix)
+        for k, v in conf_matrix.items():
+            self.aggregators[k].update(v)
 
-        def _fp(pred: set[int], target: set[int]) -> int:
-            """False positives."""
-            if target != {0}:
-                return 0
-            return len(pred - target)
+    @staticmethod
+    def _tokenize_fn(tokenizer: transformers.PreTrainedTokenizerBase, input_ids: torch.Tensor) -> list[str]:
+        """Tokenize the input."""
+        return tokenizer.batch_decode(input_ids, skip_special_tokens=True)
 
-        def _fn(pred: set[int], target: set[int]) -> int:
-            """False negatives."""
-            if pred == {0} and sum(target) > 0:
-                return 1
-            return 0
+    @staticmethod
+    def _parse_tokens_fn(tokens: list[str]) -> list[set[int]]:
+        """Parse the tokens."""
 
-        def _tn(pred: set[int], target: set[int]) -> int:
-            """True negatives."""
-            if pred == target == {0}:
-                return 1
-            return 0
+        def _parse_one_element(input_string: str) -> set[int]:
+            """Parse a single element."""
+            return {int(num.strip()) for num in input_string.split(",") if num.strip().isdigit()}
 
-        def _pos(target: set[int]) -> int:
-            """Count positives"""
-            if target != {0}:
-                return len(target)
-            return 0
+        return [_parse_one_element(x) for x in tokens]
 
-        def _neg(target: set[int]) -> float:
-            """Count negatives"""
-            return int(target == {0})
-
-        def _hit(pred: set[int], target: set[int]) -> int:
-            """Hit."""
-            return int(pred == target)
+    @staticmethod
+    def _make_conf_matrix(targets: torch.Tensor, preds: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Compute the true/false positives."""
+        _targets = targets.bool()
+        _preds = preds.bool()
 
         return {
-            "tp": torch.tensor([_tp(p, t) for p, t in zip(preds, targets)]),
-            "fp": torch.tensor([_fp(p, t) for p, t in zip(preds, targets)]),
-            "fn": torch.tensor([_fn(p, t) for p, t in zip(preds, targets)]),
-            "tn": torch.tensor([_tn(p, t) for p, t in zip(preds, targets)]),
-            "pos_count": torch.tensor([_pos(t) for t in targets]),
-            "neg_count": torch.tensor([_neg(t) for t in targets]),
-            "_hit": torch.tensor([_hit(p, t) for p, t in zip(preds, targets)]),
+            "tp": (_targets & _preds).sum(dim=0),
+            "fp": (_preds & ~_targets).sum(dim=0),
+            "fn": (_targets & ~_preds).sum(dim=0),
+            "tn": (~_targets & ~_preds).sum(dim=0),
+            "_hit": (~(_targets ^ _preds)).all(dim=1).float(),  # counting row wise exact matches
+            "pos_ratio": preds.sum() / targets.sum(),
         }
 
 
@@ -503,7 +496,7 @@ class SafeTokenize:
         """Tokenize the inputs."""
         kws = {**self.kwargs, **kwargs}
         truncation = truncation or self.truncation
-        outputs: dict[str, torch.Tensor] = dict(self.tokenizer(*args, **kws, return_tensors=self.return_tensors))
+        outputs: dict[str, torch.Tensor] = dict(self.tokenizer(*args, **kws, return_tensors=self.return_tensors))  # type: ignore
         if self.strict != "pass":
             input_ids = outputs["input_ids"]
             if input_ids.shape[-1] > self.tokenizer.model_max_length:
@@ -577,3 +570,44 @@ def get_layer_names(pattern: str) -> str | list[str]:
         raise RuntimeError(f"Unknown pattern `{pattern}`.")
 
     return pattern
+
+
+def maybe_wrap_logits_processor(
+    processor_fn: functools.partial[OutlinesLogitsProcessor] | None,
+    tokenizer: transformers.PreTrainedTokenizerBase,
+) -> transformers.LogitsProcessorList | None:
+    """Wrap the logits processor."""
+    if processor_fn is None:
+        return None
+    _tokenizer = TransformerTokenizer(tokenizer=tokenizer)
+    return transformers.LogitsProcessorList([processor_fn(tokenizer=_tokenizer)])
+
+
+def list2tensor_vectorized(dim_x: int, dim_y: int, indices: list[set[int | float]]) -> torch.Tensor:
+    """Convert a list of indices to a sparse tensor."""
+    row_indices = []
+    col_indices = []
+    values = []
+
+    for i, preds in enumerate(indices):
+        preds = torch.tensor(list(preds), dtype=torch.float32)  # Convert the set to a PyTorch tensor
+        pred_signs = torch.where(preds < 0, -1, 1)  # Determine the sign
+        pred_indices = torch.abs(preds) - 1  # Get absolute indices (0-based)
+
+        # Filter valid indices (within bounds)
+        valid_mask = (pred_indices >= 0) & (pred_indices < dim_y)
+        valid_count = int(valid_mask.sum().item())  # Explicitly convert to Python int
+        row_indices.extend([i] * valid_count)  # Repeat row index for valid preds
+        col_indices.extend(pred_indices[valid_mask].to(torch.int).tolist())  # Valid column indices
+        values.extend(pred_signs[valid_mask].tolist())  # Valid signs
+
+    # Convert row_indices, col_indices, and values to PyTorch tensors
+    row_indices = torch.tensor(row_indices, dtype=torch.long)
+    col_indices = torch.tensor(col_indices, dtype=torch.long)
+    values = torch.tensor(values, dtype=torch.float32)
+
+    # Create the sparse tensor
+    sparse_tensor = torch.zeros((dim_x, dim_y), dtype=torch.float32)
+    sparse_tensor[row_indices, col_indices] = values
+
+    return sparse_tensor

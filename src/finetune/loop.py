@@ -25,6 +25,7 @@ def training(
     fabric: L.Fabric,
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizerBase,
+    logits_processors: transformers.LogitsProcessorList | None = None,
     generation_config: transformers.GenerationConfig,
     optimizer: torch.optim.Optimizer,
     scheduler: None | torch.optim.lr_scheduler.LRScheduler = None,
@@ -35,6 +36,7 @@ def training(
     num_epochs: int,
     max_steps: None | int = None,
     micro_batch_size: None | int = None,
+    gradient_accumulation_steps: int = 1,
     pbar_keys: str = r"(target_loss)|(accuracy)",
     lm_prompt_weight: float = 0,
     eval_freq: int = 100,
@@ -70,6 +72,7 @@ def training(
         num_epochs (int): Number of epochs to train for.
         max_steps (None | int, optional): Maximum number of steps to train for.
         micro_batch_size (None | int, optional): Micro-batch size to use for each forward pass.
+        gradient_accumulation_steps (int, optional): Number of steps to accumulate gradients before stepping.
         pbar_keys (str , optional): Keys to display in the progress bar. Regex pattern.
         lm_prompt_weight (float, optional): Weight of prompt in the language modeling loss.
         eval_freq (int, optional): Evaluate every `eval_freq` steps.
@@ -91,9 +94,11 @@ def training(
         raise ValueError(
             "The optimizer must be wrapped with the lightning fabric. Use `fabric.setup_optimizers(optimizer)` to do so"
         )
+
     generate_freq = eval_freq if generate_freq < 0 else generate_freq
     if not generate_freq % eval_freq == 0:
         raise ValueError("`generate_freq` must be a multiple of `eval_freq`.")
+
     micro_batch_size = _strictly_pos_or_none(micro_batch_size)
     max_steps = _strictly_pos_or_none(max_steps)
     step: int = 0
@@ -105,6 +110,7 @@ def training(
     train_monitor.reset()
     fabric.call("on_fit_start", step=step, model=model)
     epoch_length = len(train_dataloader)
+
     try:
         for epoch in range(num_epochs):
             fabric.call("on_epoch_start", step=step)
@@ -116,44 +122,50 @@ def training(
                     total=epoch_n_steps,
                     info=_pbar_info(f"0/{epoch_n_steps} (0)", train_metrics, eval_metrics),
                 )
+
                 for it, batch in enumerate(train_dataloader):
                     if it > epoch_n_steps:
                         break
                     fabric.call("on_train_batch_start", batch=batch, step=step)
-                    # Forward & backward pass by micro-batches - only sync gradients at the last step
+
+                    # Forward & backward pass with gradient accumulation
                     n_micro_steps = (
                         math.ceil(batch["input_ids"].shape[0] / micro_batch_size) if micro_batch_size is not None else 1
                     )
                     _chrono.start()
+
+                    accumulated_loss = 0.0
                     for m, micro_batch in enumerate(_iterate_micro_batches(batch, micro_batch_size)):
                         output = _lm_forward(model, micro_batch, lm_prompt_weight)
-                        with fabric.no_backward_sync(model, enabled=m < n_micro_steps - 1):  # type: ignore
-                            fabric.backward(1 / n_micro_steps * output["loss"])
+                        loss = output["loss"] / gradient_accumulation_steps  # Scale loss
+                        accumulated_loss += output["loss"].item()
 
-                        # Do something with the model output
+                        with fabric.no_backward_sync(model, enabled=m < n_micro_steps - 1):
+                            fabric.backward(loss)
+
                         fabric.call("on_train_batch_end", batch=batch, output=output, step=step)
-
-                        # Update the training monitor
                         train_monitor.update(**batch, **output)
 
-                    # Optimizer step
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    if scheduler is not None:
-                        scheduler.step()
+                    # Optimizer step after accumulating gradients
+                    if (it + 1) % gradient_accumulation_steps == 0 or (it + 1) == len(train_dataloader):
+                        optimizer.step()
+                        optimizer.zero_grad()
+                        if scheduler is not None:
+                            scheduler.step()
+
                     step += 1
                     _chrono.stop()
 
                     # Evaluate
                     if step % eval_freq == 0:
-                        # Remove the eval task & log all the metrics metrics
                         model.eval()
-                        fabric.call("on_validation_start", step=step)  # TODO: fix this (task type)
+                        fabric.call("on_validation_start", step=step)
                         evaluate_fn = functools.partial(
                             evaluate,
                             step=step,
                             fabric=fabric,
                             model=model,
+                            logits_processors=logits_processors,
                             max_eval=max_eval,
                             pbar=pbar,
                             lm_prompt_weight=lm_prompt_weight,
@@ -179,25 +191,23 @@ def training(
                         if fabric.is_global_zero:
                             fabric.log_dict({f"eval/{k}": v for k, v in eval_metrics_.items()}, step=step)
                         eval_metrics.update(eval_metrics_)
-                        fabric.call(
-                            "on_validation_end", step=step, model=model, metrics=eval_metrics
-                        )  # TODO: fix this (task type)
+                        fabric.call("on_validation_end", step=step, model=model, metrics=eval_metrics)
                         model.train()
 
-                    # Update the progress bar
+                    # Update progress bar
                     pbar.update(
                         train_task,
                         completed=1 + it,
                         info=_pbar_info(
                             step=f"{1+it}/{epoch_n_steps} ({step})",
-                            train_metrics=train_metrics,
+                            train_metrics={**train_metrics, "loss": accumulated_loss / gradient_accumulation_steps},
                             eval_metrics=eval_metrics,
                             avg_elapsed_time=_chrono.get_avg_laps_per_second(),
                         ),
                         refresh=True,
                     )
 
-                    # Compute, reset and log the training metrics
+                    # Compute, reset, and log metrics
                     if step % log_freq == 0:
                         train_metrics.update(train_monitor.compute())
                         if fabric.is_global_zero:
@@ -210,7 +220,6 @@ def training(
                                 step=step,
                             )
 
-                # End of epoch
                 pbar.remove_task(train_task)
                 fabric.call("on_epoch_end", step=step)
 
@@ -232,6 +241,7 @@ def evaluate(
     fabric: L.Fabric,
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizerBase,
+    logits_processors: None | transformers.LogitsProcessorList = None,
     generation_config: transformers.GenerationConfig,
     dataloader: DataLoader,
     monitor: Monitor,
@@ -292,6 +302,7 @@ def evaluate(
                 pad_token_id=tokenizer.eos_token_id,
                 max_new_tokens=max_new_tokens,
                 stopping_criteria=stopping_criteria,
+                logits_processors=logits_processors,
             )
         else:
             preds_input_ids = None
@@ -356,6 +367,7 @@ def _lm_generate(
     pad_token_id: None | int = None,
     max_new_tokens: None | int = None,
     stopping_criteria: None | generate_stops.StoppingCriteriaList = None,
+    logits_processors: None | transformers.LogitsProcessorList = None,
 ) -> torch.Tensor:
     generated_ids = model.generate(
         input_ids=input_ids,
@@ -364,6 +376,7 @@ def _lm_generate(
         stopping_criteria=stopping_criteria,
         max_new_tokens=max_new_tokens,
         pad_token_id=pad_token_id,  # NOTE: https://stackoverflow.com/questions/69609401/suppress-huggingface-logging-warning-setting-pad-token-id-to-eos-token-id
+        logits_processor=logits_processors,
     )
     generated_ids = generated_ids[:, input_ids.shape[-1] :]
     return generated_ids
