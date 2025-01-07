@@ -345,38 +345,57 @@ class XMLTrie(Trie):
                 nodes = new_nodes
 
 
-def get_hard_negatives_for_code(code: str, trie: Trie, num: int) -> List[str]:
-    """Gets a number of hard negatives for a given code by going one level up in the trie
-    and selecting the first n leaves that are not the given code."""
-    node = trie.all[code]
-    children_for_parent = []
-    if node.parent_id:
-        parent = trie.all[node.parent_id]
-        children_for_parent = trie.get_all_children(parent.id)
-    children_for_node = trie.get_all_children(node.id)
-    hard_negatives = []
+def get_hard_negatives_for_code(code: str, trie: Trie, num: int | None = None) -> List[str]:
+    """Gets hard negatives for a given code by going one level up in the trie."""
     seen_codes = set([code])
-    for node in children_for_node + children_for_parent:
-        if node.code not in seen_codes:
+
+    def _extract_negatives_from_node(code: str) -> List[str]:
+        node = trie.all[code]
+        children_for_parent = []
+        if node.parent_id:
+            parent = trie.all[node.parent_id]
+            children_for_parent = trie.get_all_children(parent.id)
+        children_for_node = trie.get_all_children(node.id)
+        hard_negatives = []
+
+        # Collect hard negatives from children and parent
+        for node in children_for_node + children_for_parent:
+            if node.code in seen_codes:
+                continue
             hard_negatives.append(node.code)
             seen_codes.add(node.code)
+        return hard_negatives
+
+    hard_negatives = _extract_negatives_from_node(code)
+    # If no hard negatives, attempt using truncated code
+    if not hard_negatives:
+        truncated_code = code[:3]
+        hard_negatives = _extract_negatives_from_node(truncated_code)
+
     shuffle(hard_negatives)
-    return hard_negatives[:num]
+    return hard_negatives if num is None else hard_negatives[:num]
 
 
-def get_hard_negatives_for_list_of_codes(codes: list[str], trie: XMLTrie, num: int) -> List[str]:
-    hard_negatives = []
+def get_hard_negatives_for_list_of_codes(codes: list[str], trie: Trie, num: int) -> List[str]:
+    hard_negatives = set()  # Use a set to store unique hard negatives
     for code in codes:
-        hard_negatives.extend(get_hard_negatives_for_code(code, trie, num=num))
-    return hard_negatives
+        hard_negatives.update(get_hard_negatives_for_code(code, trie, num=num))
+    hard_negatives.difference_update(codes)
+    return list(hard_negatives)  # Convert back to a list
 
 
-def add_hard_negatives_to_set(data: pl.DataFrame, trie: Trie, source_col: str, dest_col: str, num: int) -> pl.DataFrame:
+def add_hard_negatives_to_set(
+    data: pl.DataFrame, trie: Trie, source_col: str, dest_col: str, num: int | None = None
+) -> pl.DataFrame:
     data = data.with_columns(
         pl.col(source_col)
-        .map_elements(lambda codes: get_hard_negatives_for_list_of_codes(codes, trie, num=num))
+        .map_elements(
+            lambda codes: get_hard_negatives_for_list_of_codes(codes, trie, num=num), return_dtype=pl.List(pl.Utf8)
+        )
         .alias(dest_col)
     )
+    # Ensure negatives column is not null but an empty list
+    data = data.with_columns(pl.col(dest_col).fill_null([]).alias(dest_col))
     return data
 
 
