@@ -47,10 +47,10 @@ DATASET_CONFIGS: dict[str, dict] = {
             "adapter": "MimicIvForTrainingAdapter",
         },
     },
-    "mimic-iv-3.1": {
+    "mimic-iv-3.4": {
         "identifier": "mimic-iv",
         "name_or_path": mimiciv,
-        "subsets": ["icd10cm-3.1"],
+        "subsets": ["icd10cm-3.4"],
         "options": {
             "negatives": 100,
             "segmenter": SEGMENTER,
@@ -75,11 +75,11 @@ class Arguments(BaseSettings):
     """Script arguments."""
 
     project_name: str = "icd10cm"
-    dataset: str = "mimic-iv-3.1-hard-neg"
+    dataset: str = "mimic-iv-3.4"
 
     version: str = "v1"
-    backbone: str = "meta-llama/Llama-3.2-3B-Instruct"
-    output_path: str = Path("~/research/models/{version}-{backbone}-align").expanduser().as_posix()
+    backbone: str = "meta-llama/Llama-3.3-70B-Instruct"
+    output_path: str = Path("~/research/models/{version}-{backbone}-align-soft-neg-5k").expanduser().as_posix()
     debug: int = 1
     # Training details
     prompt_name: str = "icdcm_v2_it"  # lookup in `src/alignment/templates`
@@ -87,11 +87,11 @@ class Arguments(BaseSettings):
     # functools.partial(
     #     RegexLogitsProcessor, regex_string=r"(?:[1-9]\d{0,3})(?:,(?:[1-9]\d{0,3})){0,39}"
     # )
-    train_size: int = 50_000
+    train_size: int = 5_000
     batch_size: int = 1
     eval_batch_size: int = 1
     micro_batch_size: int = 1
-    gradient_accumulation_steps: int = 8
+    gradient_accumulation_steps: int = 4
 
     lr: float = 1e-5
     weight_decay: float = 1e-1
@@ -109,10 +109,10 @@ class Arguments(BaseSettings):
     do_sample: bool = False
     # Peft
     peft: str = "LORA"  # none | LORA
-    lora_r: int = 32
-    lora_alpha: int = 32
+    lora_r: int = 8
+    lora_alpha: int = 16
     lora_dropout: float = 0.05
-    lora_target_modules: str = ":all"
+    lora_target_modules: str = ":all-lm_head"
     # Loop details
     track_metric: str = "f1_macro"
     tack_mode: str = "max"

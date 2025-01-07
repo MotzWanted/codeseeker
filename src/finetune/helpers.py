@@ -540,7 +540,26 @@ def merge_and_unload_lora(model: transformers.PreTrainedModel) -> transformers.P
     return model
 
 
-def get_layer_names(base_layers: list[str], pattern: str) -> list[str]:
+ALL_LAYERS = [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+    "lm_head",
+]
+
+ATTN_LAYERS = [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+]
+
+
+def get_layer_names(pattern: str) -> list[str]:
     """
     Get the layer names based on the base layers and a pattern.
 
@@ -560,9 +579,9 @@ def get_layer_names(base_layers: list[str], pattern: str) -> list[str]:
         # Handle exclusions, e.g., ":all-lm_head"
         if "-" in pattern:
             exclusions = {excl.strip() for excl in pattern.split("-")[1:]}
-            layers = [layer for layer in base_layers if layer not in exclusions]
+            layers = [layer for layer in ALL_LAYERS if layer not in exclusions]
         else:
-            layers = base_layers
+            layers = ALL_LAYERS
 
         return layers
 
