@@ -540,36 +540,34 @@ def merge_and_unload_lora(model: transformers.PreTrainedModel) -> transformers.P
     return model
 
 
-MISTRAL_TARGET_ALL_LAYERS = [
-    "q_proj",
-    "k_proj",
-    "v_proj",
-    "o_proj",
-    "gate_proj",
-    "up_proj",
-    "down_proj",
-    "lm_head",
-]
+def get_layer_names(base_layers: list[str], pattern: str) -> list[str]:
+    """
+    Get the layer names based on the base layers and a pattern.
 
-MISTRAL_TARGET_ATTN_LAYERS = [  # TODO
-    "q_proj",
-    "k_proj",
-    "v_proj",
-    "o_proj",
-]
+    Args:
+        base_layers (list[str]): The base list of layer names.
+        pattern (str): The pattern for selecting or excluding layers.
+                       Patterns can start with ":" to indicate selection commands
+                       and use "-<layer>" to exclude specific layers.
 
-
-def get_layer_names(pattern: str) -> str | list[str]:
-    """Get the layer names."""
+    Returns:
+        list[str]: The filtered layer names.
+    """
+    # If the pattern starts with ":", treat it as a command
     if pattern.startswith(":"):
         pattern = pattern[1:]
-        if pattern == "all":
-            return MISTRAL_TARGET_ALL_LAYERS
-        if pattern == "attn":
-            return MISTRAL_TARGET_ATTN_LAYERS
-        raise RuntimeError(f"Unknown pattern `{pattern}`.")
 
-    return pattern
+        # Handle exclusions, e.g., ":all-lm_head"
+        if "-" in pattern:
+            exclusions = {excl.strip() for excl in pattern.split("-")[1:]}
+            layers = [layer for layer in base_layers if layer not in exclusions]
+        else:
+            layers = base_layers
+
+        return layers
+
+    # If not a recognized command, return the pattern as-is for flexibility
+    raise RuntimeError(f"Unknown pattern `{pattern}`.")
 
 
 def maybe_wrap_logits_processor(
