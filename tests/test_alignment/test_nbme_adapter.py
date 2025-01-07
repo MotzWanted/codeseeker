@@ -2,7 +2,7 @@ from pathlib import Path
 import datasets
 import pytest
 
-from dataloader.adapt.alignment import NbmeAdapter
+from dataloader.adapt.adapters import NbmeAdapter
 from segmenters.base import Segmenter, factory
 
 BASE_PATH = Path("tests/alignment/data")
@@ -32,7 +32,7 @@ def test_shuffling_of_target(dataset: datasets.Dataset, segmenter: Segmenter, se
     """Test that the target is shuffled yielding different targets for each seed."""
     adapted_targets = []
     for seed in seeds:
-        adapter = NbmeAdapter(segmenter=segmenter, query_key="patient_note", seed=seed)
+        adapter = NbmeAdapter(segmenter=segmenter)
         adapted_dset = dataset.map(
             adapter,
             num_proc=1,
