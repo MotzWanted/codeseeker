@@ -22,9 +22,9 @@ from pathlib import Path
 import polars as pl
 
 from dataloader import mimic_utils
+from dataloader.constants import PROJECT_ROOT
 
 random.seed(10)
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 OUTPUT_DIR = Path("data/mimic-iv/processed")
 
 
@@ -80,26 +80,8 @@ def main():
 
     # Load the dataframes
     mimic_notes = pl.read_csv(PROJECT_ROOT / "data/mimic-iv-note/raw/discharge.csv.gz")
-    mimic_diag = pl.read_csv(
-        PROJECT_ROOT / "data/mimic-iv/raw/diagnoses_icd.csv.gz",
-        schema={
-            "hadm_id": pl.Int64,
-            "subject_id": pl.Int64,
-            "icd_code": pl.String,
-            "icd_version": pl.String,
-        },
-        truncate_ragged_lines=True,
-    )
-    mimic_proc = pl.read_csv(
-        PROJECT_ROOT / "data/mimic-iv/raw/procedures_icd.csv.gz",
-        schema={
-            "hadm_id": pl.Int64,
-            "subject_id": pl.Int64,
-            "icd_code": pl.String,
-            "icd_version": pl.String,
-        },
-        truncate_ragged_lines=True,
-    )
+    mimic_diag = pl.read_csv(PROJECT_ROOT / "data/mimic-iv/raw/diagnoses_icd.csv.gz")
+    mimic_proc = pl.read_csv(PROJECT_ROOT / "data/mimic-iv/raw/procedures_icd.csv.gz")
 
     # rename the columns
     mimic_notes = mimic_notes.rename(
@@ -161,7 +143,6 @@ def main():
         code_type_column="procedure_code_type",
     )
 
-    mimic_notes = parse_notes_dataframe(mimic_notes)
     mimic_codes = mimic_diag.join(mimic_proc, on=mimic_utils.ID_COLUMN, how="full", coalesce=True)
     mimiciv = mimic_notes.join(mimic_codes, on=mimic_utils.ID_COLUMN, how="inner")
     mimiciv = mimiciv.with_columns(mimiciv["note_type"].str.replace("DS", "discharge_summary"))

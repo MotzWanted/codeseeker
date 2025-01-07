@@ -4,7 +4,6 @@ import random
 import typing as typ
 
 import datasets
-import numpy as np
 import pydantic
 
 from dataloader.base import DatasetOptions
@@ -15,28 +14,53 @@ Om = typ.TypeVar("Om", bound=pydantic.BaseModel)
 DictStrKey: typ.TypeAlias = dict[str, typ.Any]
 
 
-class BaseFewshotModel(pydantic.BaseModel):
+class BaseTrainingModel(pydantic.BaseModel):
     """Fewshot model."""
 
     aid: str
     classes: list[str]
-    segment: str
+    segments: str
     targets: list[int]
+    codes: list[str] = pydantic.Field(..., description="Look up table for classes.")
 
     @pydantic.field_validator("targets", mode="after")
     def order_target_indices(cls, v: list[int]) -> list[int]:
         """Order the target indices from smallest to largest."""
         return sorted(v)
 
+    @pydantic.model_validator(mode="after")
+    def validate_codes_and_classes(self):
+        """Validate the codes and classes."""
+        if len(self.classes) != len(self.codes):
+            raise ValueError("The number of classes and codes must be the same.")
+        return self
 
-class BaseDataModel(pydantic.BaseModel):
+    def parse_targets(self) -> str:
+        """Parse the targets."""
+        return f"{','.join(str(i) for i in self.targets)}"
+
+
+class BaseInferenceModel(pydantic.BaseModel):
     """Alignment model."""
 
     aid: str = pydantic.Field(..., description="The alignment identifier.")
+    note_type: str | None = pydantic.Field(default=None, description="The note type.")
+    note_subtype: str | None = pydantic.Field(default=None, description="The note subtype.")
     classes: list[str] = pydantic.Field(..., description="The classes to constrain the output space.")
     segments: list[str] = pydantic.Field(..., description="The segments to align.")
     targets: list[list[int]] = pydantic.Field(default=[[]], description="The target indices point to class indices.")
-    fewshots: list[BaseFewshotModel] | None = pydantic.Field(default=None, description="Fewshots to include in prompt.")
+    fewshots: list[BaseTrainingModel] | None = pydantic.Field(
+        default=None, description="Fewshots to include in prompt."
+    )
+    index2code: dict[str, str] = pydantic.Field(..., description="Look up table for classes.")
+
+    @pydantic.field_validator("segments", mode="before")
+    @classmethod
+    def validate_no_empty_strings(cls, v: list[str]) -> list[str]:
+        """Validate that the list of strings do not contain empty strings."""
+        if "" in v:
+            raise ValueError("The list of strings must not contain empty strings.")
+        return v
 
     @pydantic.field_validator("targets", mode="before")
     def validate_target_indices(cls, v: list[list[int]]) -> list[list[int]]:
@@ -58,23 +82,6 @@ class BaseDataModel(pydantic.BaseModel):
         seed = int(hashlib.sha256(self.aid.encode("utf-8")).hexdigest(), 16) % (2**32)
         random.seed(seed)
         random.shuffle(self.fewshots)
-        return self
-
-
-class PredictionDataModel(BaseDataModel):
-    """Alignment model."""
-
-    predictions: list[list[int]]
-    sparse_matrix: list[list[float]]
-    probabilities: list[list[float]]
-
-    @pydantic.model_validator(mode="after")
-    def validate_predictions(self):
-        """Validate the predictions."""
-        if len(self.predictions) != len(self.targets):
-            raise ValueError("The number of predictions must match the number of labels.")
-        if np.array(self.sparse_matrix).shape != np.array(self.probabilities).shape:
-            raise ValueError("The shape of the sparse matrix and probabilities must match.")
         return self
 
 
@@ -113,7 +120,7 @@ class Adapter(typ.Generic[Im, Om], abc.ABC):
             return False
 
     @classmethod
-    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseDataModel:
+    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> Om:
         """Placeholder for translating a row."""
         raise NotImplementedError(f"{cls.__name__} does not implement `translate_row`")
 
@@ -139,7 +146,7 @@ class Adapter(typ.Generic[Im, Om], abc.ABC):
         if isinstance(x, datasets.Dataset):
             return cls.translate_dset(x, options, **map_kwargs)
         if isinstance(x, datasets.DatasetDict):
-            return datasets.DatasetDict({k: cls.translate_dset(v, **map_kwargs) for k, v in x.items()})  # type: ignore
+            return datasets.DatasetDict({k: cls.translate_dset(v, options, **map_kwargs) for k, v in x.items()})  # type: ignore
         if isinstance(x, dict):
             return cls.translate_row(x).model_dump()  # type: ignore
 

@@ -135,7 +135,7 @@ def main():
         {
             "HADM_ID": mimic_utils.ID_COLUMN,
             "SUBJECT_ID": mimic_utils.SUBJECT_ID_COLUMN,
-            "ROW_ID": "note_id",
+            "ROW_ID": mimic_utils.ROW_ID_COLUMN,
             "TEXT": mimic_utils.TEXT_COLUMN,
             "CATEGORY": "note_type",
             "DESCRIPTION": "note_subtype",

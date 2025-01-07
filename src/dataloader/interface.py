@@ -27,18 +27,16 @@ def _take_subset(
 
 
 def combine_datasets(
-    inputs: datasets.Dataset | list[datasets.Dataset | datasets.DatasetDict],
-) -> datasets.Dataset:
+    inputs: list[datasets.Dataset | datasets.DatasetDict],
+) -> datasets.Dataset | datasets.DatasetDict:
     """Combine a list of datasets into a single dataset."""
+    if isinstance(inputs, (datasets.DatasetDict, dict)):
+        return combine_datasets(list(inputs.values()))
     if isinstance(inputs, datasets.Dataset):
         return inputs
-
     if isinstance(inputs, list):
         inputs = [combine_datasets(d) for d in inputs]  # type: ignore
         return datasets.concatenate_datasets(inputs)  # type: ignore
-
-    if isinstance(inputs, (datasets.DatasetDict, dict)):
-        return combine_datasets(list(inputs.values()))
 
     raise TypeError(f"Unexpected type `{type(inputs)}`")
 
@@ -72,6 +70,8 @@ def _load_dataset_from_config(config: DatasetConfig, **kws: typing.Any) -> datas
     """Load the dataset, process it according to the prompt template and return a HF dataset."""
     subsets = config.subsets or [None]
     loaded_subsets = [_load_one_dataset(config.name_or_path, subset, split=config.split) for subset in subsets]
+    if len(loaded_subsets) == 1:
+        return loaded_subsets[0]
     return combine_datasets(loaded_subsets)
 
 

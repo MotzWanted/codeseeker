@@ -42,7 +42,11 @@ class DatasetOptions(pydantic.BaseModel):
     )
     negatives: int = pydantic.Field(
         default=-1,
-        description="Number of negative examples to generate.",
+        description="Number of negative examples to sample.",
+    )
+    hard_negatives: float = pydantic.Field(
+        default=0.0,
+        description="Fraction of hard negatives to sample.",
     )
     shots: int = pydantic.Field(
         default=0,
@@ -52,7 +56,8 @@ class DatasetOptions(pydantic.BaseModel):
         default=0,
         description="Seed for reproducibility.",
     )
-    model_config = SettingsConfigDict(arbitrary_types_allowed=True)
+    adapter: None | str = pydantic.Field(default=None, description="Adapter for the dataset.")
+    model_config = SettingsConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
 
 class DatasetConfig(pydantic.BaseModel):

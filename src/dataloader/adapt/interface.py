@@ -2,7 +2,7 @@ import typing as typ
 
 import datasets
 from dataloader.adapt.base import Adapter
-from dataloader.adapt.adapters import KNOWN_ADAPTERS
+from dataloader.adapt.adapters import KNOWN_ADAPTERS, get_adapter_by_name
 from dataloader.base import DatasetOptions
 
 from .utils import get_first_row
@@ -45,7 +45,11 @@ def transform(
 ) -> D:
     """Translate a HuggingFace daatset."""
     row = get_first_row(data)
-    adapter: None | typ.Type[Adapter] = find_adapter(row, verbose=verbose)
+
+    if options.adapter:
+        adapter = get_adapter_by_name(options.adapter)
+    else:
+        adapter: None | typ.Type[Adapter] = find_adapter(row, verbose=verbose)
     if adapter is None:
         raise CantHandleError(row, reason="No matching `Adapter` could be found.")
     return adapter.translate(data, options, map_kwargs=options.prep_map_kws)

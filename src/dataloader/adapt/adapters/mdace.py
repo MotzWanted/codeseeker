@@ -1,9 +1,9 @@
-import ast
+import json
 import typing as typ
 import pydantic
 
 
-from dataloader.adapt.base import Adapter, BaseDataModel
+from dataloader.adapt.base import Adapter, BaseInferenceModel
 from dataloader.adapt.utils import create_labels, flatten_fewshots
 from dataloader.base import DatasetOptions
 from segmenters import Segment
@@ -26,20 +26,21 @@ class MdaceAnnotationModel(pydantic.BaseModel):
 class MdaceDataModel(pydantic.BaseModel):
     """Model for a clinical patient note from the USMLE® Step 2 Clinical Skills exam."""
 
-    subject_id: int
     hadm_id: int
     note_id: int
+    note_type: str
+    note_subtype: str
     text: str
     classes: dict[str, str]
     annotations: MdaceAnnotationModel
 
     @pydantic.field_validator("classes", mode="before")
     @classmethod
-    def validate_dict_string(cls, v: dict | str) -> dict:
+    def validate_dict_string(cls, v: dict | str) -> dict[str, str]:
         """Ensure that the classes are always a dictionary."""
         if isinstance(v, dict):
             return {str(key): value for key, value in v.items()}
-        _v: dict = ast.literal_eval(v)
+        _v: dict = json.loads(v)
         return {str(key): value for key, value in _v.items()}
 
 
@@ -47,31 +48,32 @@ class MdaceAdapter(Adapter):
     """Adapter for the MedQA dataset."""
 
     input_model: typ.Type[MdaceDataModel] = MdaceDataModel
-    output_model: typ.Type[BaseDataModel] = BaseDataModel
+    output_model: typ.Type[BaseInferenceModel] = BaseInferenceModel
 
     @classmethod
-    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseDataModel:
+    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseInferenceModel:
         """Adapt a row."""
 
         def _format_row(row: dict[str, typ.Any], options: DatasetOptions) -> dict[str, typ.Any]:
             struct_row = cls.input_model(**row)
             segments: list[Segment] = list(options.segmenter(struct_row.text))
             text_segments: list[str] = [chunk.text for chunk in segments]
-            classes, targets = [], []
-            if struct_row.annotations is not None:
-                classes, targets = create_labels(
-                    segments=segments,
-                    targets=struct_row.annotations.code,
-                    spans=struct_row.annotations.location,
-                    classes=struct_row.classes,
-                    negatives=options.negatives,
-                    seed=options.seed,
-                )
+            code2class, classes, targets = create_labels(
+                segments=segments,
+                targets=struct_row.annotations.code,
+                spans=struct_row.annotations.location,
+                classes=struct_row.classes,
+                negatives=options.negatives,
+                seed=options.seed,
+            )
             return {
-                "aid": f"{struct_row.subject_id}_{struct_row.hadm_id}_{struct_row.note_id}",
+                "aid": f"{struct_row.hadm_id}_{struct_row.note_id}",
+                "note_type": struct_row.note_type,
+                "note_subtype": struct_row.note_subtype,
                 "classes": classes,
                 "segments": text_segments,
                 "targets": targets,
+                "index2code": {str(idx): code for idx, code in enumerate(code2class, start=1)},
             }
 
         formatted_row = _format_row(row, options)

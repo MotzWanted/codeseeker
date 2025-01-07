@@ -1,8 +1,12 @@
 """Modified version of the data_helper_functions.py file from the https://github.com/JoakimEdin/explainable-medical-coding/blob/main/explainable_medical_coding/utils/data_helper_functions.py."""
 
+from copy import copy
+import re
 import numpy as np
 import polars as pl
 from datasets import DatasetDict
+
+from tools.code_trie import Trie
 
 ROW_ID_COLUMN = "note_id"
 ID_COLUMN = "hadm_id"
@@ -12,6 +16,9 @@ SUBJECT_ID_COLUMN = "subject_id"
 SOS = "<sos>"
 EOS = "<eos>"
 PAD = "<pad>"
+
+DIAGNOSIS_CODE_PATTERN = r"^([A-Z][0-9|A-Z]{2})\.?([A-Z0-9]{1,4})?$"
+PROCEDURE_CODE_PATTERN = r"^[A-Z0-9]{7}$"
 
 
 def is_list_empty(x: list) -> bool:
@@ -90,7 +97,7 @@ def remove_rare_codes(df: pl.DataFrame, code_columns: list[str], min_count: int)
         code_exploded_filtered = code_exploded.filter(pl.col(code_column).is_in(codes_to_include))
         code_filtered = code_exploded_filtered.group_by(ID_COLUMN).agg(pl.col(code_column))
         df = df.drop(code_column)
-        df = df.join(code_filtered, on=ID_COLUMN, how="left")
+        df = df.join(code_filtered, on=ID_COLUMN, how="inner")
     return df
 
 
@@ -343,3 +350,50 @@ def filter_unknown_targets(example: dict, known_targets: set[str]) -> dict:
                 example["procedure_code_spans"] = None
 
     return example
+
+
+def truncate_code(code: str, code_level: int) -> str:
+    """Truncate the code to the specified level."""
+    diagnosis_match = re.search(DIAGNOSIS_CODE_PATTERN, code)
+    procedure_match = re.search(PROCEDURE_CODE_PATTERN, code)
+    if diagnosis_match:
+        prefix, suffix = diagnosis_match.groups()
+        if not suffix:
+            return prefix
+        rstrip_len = min(code_level, len(suffix))
+        truncated_suffix = suffix[:rstrip_len]
+        return f"{prefix}.{truncated_suffix}".rstrip(".")
+    elif procedure_match:
+        prefix, suffix = code[:4], code[4:]
+        if not suffix:
+            return prefix
+        rstrip_len = min(code_level, len(suffix))
+        truncated_suffix = suffix[:rstrip_len]
+        return f"{prefix}{truncated_suffix}"
+    raise ValueError(f"Invalid code: {code}")
+
+
+def truncate_code_to_description(code: str, code_level: int, trie: Trie) -> str | None:
+    """Check if a code has a description."""
+    _code = copy(code)
+    _code_level = copy(code_level)
+    while len(_code) >= 3:
+        if _code in trie.lookup and trie[_code].desc:
+            return _code
+        _code_level -= 1
+        _code = truncate_code(_code, _code_level)
+    return None
+
+
+def look_up_code_description(code: str, trie: dict) -> str:
+    """Look up the description of a code."""
+    desc = trie[code].desc
+    if desc:
+        return desc
+    diagnosis_match = re.search(DIAGNOSIS_CODE_PATTERN, code)
+    procedure_match = re.search(PROCEDURE_CODE_PATTERN, code)
+    if diagnosis_match:
+        return trie[code[:3]].desc
+    elif procedure_match:
+        return trie[code[:4]].desc
+    return ""

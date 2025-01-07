@@ -13,8 +13,6 @@ from tools.code_trie import XMLTrie
 
 logger = datasets.logging.get_logger(__name__)
 
-_NOTES_PATH = PROJECT_ROOT / "data/mdace/processed/mdace_notes.parquet"
-_MIMICIII_PATH = PROJECT_ROOT / "data/mimic-iii/processed/mimiciii.parquet"
 _ANNOTATIONS_PATH = PROJECT_ROOT / "data/mdace/processed/mdace_inpatient_annotations.parquet"
 _MEDICAL_CODING_SYSTEMS_DIR = PROJECT_ROOT / "data/medical-coding-systems/icd"
 
@@ -67,47 +65,47 @@ class MDACE_ICD9(datasets.GeneratorBasedBuilder):
 
     BUILDER_CONFIGS = [
         MDACEICD9Config(
-            name="icd10cm-3",
+            name="icd10cm-3.0",
             version=datasets.Version("1.0.0", ""),
             description="MDACE inpatient subset dataset with ICD-10 diagnosis codes of 3 digits and evidence spans.",
         ),
         MDACEICD9Config(
-            name="icd10cm-4",
+            name="icd10cm-3.1",
             version=datasets.Version("1.0.0", ""),
             description="MDACE inpatient subset dataset with ICD-10 diagnosis codes of 4 digits and evidence spans.",
         ),
         MDACEICD9Config(
-            name="icd10cm-5",
+            name="icd10cm-3.2",
             version=datasets.Version("1.0.0", ""),
             description="MDACE inpatient subset dataset with ICD-10 diagnosis codes of 5 digits and evidence spans.",
         ),
         MDACEICD9Config(
-            name="icd10cm-6",
+            name="icd10cm-3.3",
             version=datasets.Version("1.0.0", ""),
             description="MDACE inpatient subset dataset with ICD-10 diagnosis codes of 6 digits and evidence spans.",
         ),
         MDACEICD9Config(
-            name="icd10cm-7",
+            name="icd10cm-3.4",
             version=datasets.Version("1.0.0", ""),
             description="MDACE inpatient subset dataset with ICD-10 diagnosis codes of 7 digits and evidence spans.",
         ),
         MDACEICD9Config(
-            name="icd10pcs-4",
+            name="icd10pcs-4.0",
             version=datasets.Version("1.0.0", ""),
             description="MDACE inpatient subset dataset with ICD-10 procedure codes of 4 digits and evidence spans.",
         ),
         MDACEICD9Config(
-            name="icd10pcs-5",
+            name="icd10pcs-4.1",
             version=datasets.Version("1.0.0", ""),
             description="MDACE inpatient subset dataset with ICD-10 procedure codes of 5 digits and evidence spans.",
         ),
         MDACEICD9Config(
-            name="icd10pcs-6",
+            name="icd10pcs-4.2",
             version=datasets.Version("1.0.0", ""),
             description="MDACE inpatient subset dataset with ICD-10 procedure codes of 6 digits and evidence spans.",
         ),
         MDACEICD9Config(
-            name="icd10pcs-7",
+            name="icd10pcs-4.3",
             version=datasets.Version("1.0.0", ""),
             description="MDACE inpatient subset dataset with ICD-10 procedure codes of 7 digits and evidence spans.",
         ),
@@ -118,7 +116,6 @@ class MDACE_ICD9(datasets.GeneratorBasedBuilder):
             description=_DESCRIPTION,
             features=datasets.Features(
                 {
-                    mimic_utils.SUBJECT_ID_COLUMN: datasets.Value("int64"),
                     mimic_utils.ID_COLUMN: datasets.Value("int64"),
                     mimic_utils.ROW_ID_COLUMN: datasets.Value("string"),
                     "note_type": datasets.Value("string"),
@@ -142,7 +139,6 @@ class MDACE_ICD9(datasets.GeneratorBasedBuilder):
         """Process the MedDec data."""
         return data.group_by(
             [
-                mimic_utils.SUBJECT_ID_COLUMN,
                 mimic_utils.ID_COLUMN,
                 mimic_utils.ROW_ID_COLUMN,
                 "note_type",
@@ -163,17 +159,23 @@ class MDACE_ICD9(datasets.GeneratorBasedBuilder):
             ]
         )
 
+    def parse_config_name(self) -> tuple[str, int]:
+        """Parse the configuration name."""
+        code_type, code_level = self.config.name.split("-")
+        code_level = int(code_level.split(".")[-1])
+        return code_type, code_level
+
     def _split_generators(  # type: ignore
         self, dl_manager: datasets.DownloadManager
     ) -> list[datasets.SplitGenerator]:
         # splits = {split: dl_manager.download_and_extract(str(path)) for split, path in _SPLITS.items()}
         splits = {split: pl.read_csv(path, new_columns=[mimic_utils.ID_COLUMN]) for split, path in _SPLITS.items()}
 
-        code_type, code_level = self.config.name.split("-")
+        code_type, code_level = self.parse_config_name()
         data = self._process_data(
             code_level=int(code_level),
             code_type=code_type,
-        ).drop(["CHARTDATE", "CHARTTIME", "STORETIME", "CGID", "ISERROR"])
+        )
         classes = {k: v for k, v in zip(data["code"], data["code_description"])}
         aggregated_data = self.aggregate_rows(data)
         aggregated_data = aggregated_data.with_columns([pl.lit(json.dumps(classes)).alias("classes")])
@@ -215,15 +217,11 @@ class MDACE_ICD9(datasets.GeneratorBasedBuilder):
         code_level: int,
     ) -> pl.DataFrame:
         """Processes the raw dataset."""
-        notes = pl.read_parquet(_NOTES_PATH)
-        mimiciii = pl.read_parquet(_MIMICIII_PATH)
         mdace = pl.read_parquet(_ANNOTATIONS_PATH)
 
         if "cm" in code_type:
-            mimic_code_type_key = "diagnosis"
             code_system_file = f"{code_type}_tabular_2025.xml"
         elif "pcs" in code_type:
-            mimic_code_type_key = "procedure"
             code_system_file = f"{code_type}_tables_2025.xml"
         else:
             raise ValueError(f"Invalid code type: {code_type}")
@@ -246,44 +244,42 @@ class MDACE_ICD9(datasets.GeneratorBasedBuilder):
             .alias("spans")
         )
 
-        # Truncate codes to `code_level` and look up descriptions
-        mdace_icd = mdace_icd.with_columns(
+        def find_description(code: str, code_level: int) -> tuple[str, str]:
+            """Find the description of a code."""
+            if code in xml_trie.lookup:
+                return code, xml_trie[code].desc
+            # If the code is still valid for truncation, recurse with one less level
+            if len(code) < 3:
+                # If all levels are exhausted, raise an error or return a fallback value
+                raise ValueError(f"Code {code} not found in the XML trie.")
+            code_level -= 1
+            truncated_code = mimic_utils.truncate_code(code, code_level)
+            return find_description(truncated_code, code_level)
+
+        truncated_annotations_icd = mdace_icd.with_columns(
             pl.col("code")
             .map_elements(
-                lambda code: code[:code_level],  # Truncate code
+                lambda code: mimic_utils.truncate_code(code, code_level),
                 return_dtype=pl.Utf8,
             )
             .alias("code")
         )
-        mdace_icd = mdace_icd.with_columns(
-            pl.col("code")
-            .map_elements(
-                lambda truncated_code: xml_trie[truncated_code].desc if truncated_code in xml_trie.lookup else "",
-                return_dtype=pl.Utf8,
-            )
-            .alias("code_description")
+
+        truncated_annotations_icd = truncated_annotations_icd.with_columns(
+            [
+                pl.col("code")
+                .map_elements(lambda x: find_description(x, code_level)[0], return_dtype=pl.Utf8)
+                .alias("code"),
+                pl.col("code")
+                .map_elements(lambda x: find_description(x, code_level)[1], return_dtype=pl.Utf8)
+                .alias("code_description"),
+            ]
         )
 
-        # Generate mappings for ICD code versions
-        icd_mapping = self._generate_code_mapping(
-            mimiciii.filter(pl.col(f"{mimic_code_type_key}_code_type") == code_type)[f"{mimic_code_type_key}_codes"]
-            .explode()
-            .unique(),
-            mdace_icd.filter(pl.col("code_type") == code_type)["code"].explode().unique(),
-        )
-
-        # Map ICD codes with explicit return_dtype
-        annotations_icd = mdace_icd.with_columns(
-            pl.col("code").map_elements(lambda code: icd_mapping.get(code, code), return_dtype=pl.Utf8).alias("code")
-        )
-
-        notes = notes.with_columns(pl.col(mimic_utils.ROW_ID_COLUMN).cast(pl.Int64))
-
-        # Join annotations and notes
-        return notes.join(annotations_icd, on=mimic_utils.ROW_ID_COLUMN, how="inner")
+        return truncated_annotations_icd
 
     def _generate_code_mapping(self, old_codes: set[str], new_codes: set[str]) -> dict[str, str]:
-        """Generate a mapping from old ICD-9 codes to new ICD-9 codes."""
+        """Generate a mapping from old ICD-9 codes to new ICD-10 codes."""
         mapping = {}
         for new_code in new_codes:
             temp_code = new_code

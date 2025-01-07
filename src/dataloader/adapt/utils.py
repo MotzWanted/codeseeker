@@ -1,12 +1,12 @@
-import random
 import secrets
 import typing
+from random import Random
 
 import datasets
 from intervaltree import Interval, IntervalTree
 from rich.table import Table
 
-from dataloader.adapt.base import BaseDataModel, BaseFewshotModel
+from dataloader.adapt.base import BaseInferenceModel, BaseTrainingModel
 from segmenters.models import Segment
 
 
@@ -99,50 +99,79 @@ def map_segments_to_targets(
 
 
 def sample_negatives(
-    classes: dict[str, str], targets: list[list[int]], num_negatives: int, seed: int = 42
-) -> dict[int, str]:
+    classes: dict[str, str],
+    targets: list[list[str]],
+    num_negatives: int,
+    seed: int,
+    hard_ratio: float = 0.0,
+    hard_negatives: list[str] = [],
+) -> dict[str, str]:
     """Sample negative features."""
     if num_negatives < 0:
         # Return all features if negatives is less than zero
         return classes
 
-    positive_features = {key for inner_list in targets for key in inner_list}
+    # Convert to set once for O(1) lookups
+    positive_features: set[str] = set().union(*targets)
+
     if num_negatives == 0:
         # Return only positive features
         return {k: v for k, v in classes.items() if k in positive_features}
 
-    negative_features = {key for key in classes if key not in positive_features}
-    random.seed(seed)
-    negative_samples = random.sample(list(negative_features), min(num_negatives, len(negative_features)))
+    # Do single pass to build positives dict and negative keys list
+    result = {}
+    negative_keys = []
+    for k, v in classes.items():
+        if k in positive_features:
+            result[k] = v
+        elif k in hard_negatives:
+            continue
+        else:
+            negative_keys.append(k)
 
-    return {k: v for k, v in classes.items() if k in set.union(positive_features, negative_samples)}
+    # Sort and sample negatives
+    negative_keys.sort()
+    rng = Random(seed)
+
+    number_of_hard_samples = min(hard_ratio * num_negatives, len(hard_negatives))
+    hard_negatives = rng.sample(hard_negatives, min(int(number_of_hard_samples), len(hard_negatives)))
+
+    number_of_soft_samples = max((1 - hard_ratio) * num_negatives, num_negatives - len(hard_negatives))
+    soft_negatives = rng.sample(negative_keys, min(int(number_of_soft_samples), len(negative_keys)))
+
+    # Add selected negatives to result
+    for k in hard_negatives + soft_negatives:
+        result[k] = classes[k]
+
+    return result
 
 
-def flatten_fewshots(fewshots: list[BaseDataModel], seed: int) -> list[BaseFewshotModel]:
+def flatten_fewshots(fewshots: list[BaseInferenceModel], seed: int) -> list[BaseTrainingModel]:
     """Sample n targets and labels from fewshots data without replacement."""
     flatten_fewshots = []
     for shot in fewshots:
         for idx in range(len(shot.segments)):
             flatten_fewshots.append(
-                BaseFewshotModel(
+                BaseTrainingModel(
                     aid=f"{shot.aid}-{idx}",
                     classes=shot.classes,
-                    segment=shot.segments[idx],
+                    segments=shot.segments[idx],
                     targets=shot.targets[idx],
+                    codes=shot.index2code,
                 )
             )
     # sample 1000 shots to avoid memory issues
-    random.seed(seed)
-    return random.sample(flatten_fewshots, min(1000, len(flatten_fewshots)))
+    rng = Random(seed)
+    return rng.sample(flatten_fewshots, min(1000, len(flatten_fewshots)))
 
 
 def shuffle_classes(
-    classes: dict[int | str, str], targets: list[list[int]], seed: int
-) -> tuple[list[str], list[list[int]]]:
+    classes: dict[str, str], targets: list[list[str]], seed: int
+) -> tuple[list[str], list[str], list[list[int]]]:
     # Extract feature keys and values
     shuffled_keys = list(classes.keys())
-    random.seed(seed)
-    random.shuffle(shuffled_keys)
+    rng = Random(seed)
+    rng.shuffle(shuffled_keys)
 
     shuffled_values = [classes[key] for key in shuffled_keys]
 
@@ -157,7 +186,7 @@ def shuffle_classes(
         else:
             shuffled_targets.append([0])
 
-    return shuffled_values, shuffled_targets
+    return shuffled_keys, shuffled_values, shuffled_targets
 
 
 def create_labels(
@@ -167,8 +196,8 @@ def create_labels(
     classes: dict[str, str],
     negatives: int,
     seed: int,
-) -> tuple[list[list[int]], list[str]]:
+) -> tuple[dict[str, str], list[str], list[list[int]]]:
     targets_index = map_segments_to_targets(segments=segments, targets=targets, spans=spans)
-    output_space = sample_negatives(classes, targets_index, negatives)
-    shuffled_features, shuffled_targets = shuffle_classes(output_space, targets_index, seed)
-    return shuffled_features, shuffled_targets
+    output_space = sample_negatives(classes, targets_index, negatives, seed)
+    _, shuffled_classes, shuffled_targets = shuffle_classes(output_space, targets_index, seed)
+    return output_space, shuffled_classes, shuffled_targets

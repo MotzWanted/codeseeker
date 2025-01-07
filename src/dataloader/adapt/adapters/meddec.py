@@ -3,7 +3,7 @@ import typing as typ
 import pydantic
 
 
-from dataloader.adapt.base import Adapter, BaseDataModel
+from dataloader.adapt.base import Adapter, BaseInferenceModel
 from dataloader.adapt.utils import create_labels, flatten_fewshots
 from dataloader.base import DatasetOptions
 from segmenters import Segment
@@ -49,10 +49,10 @@ class MedDecAdapter(Adapter):
     """Adapter for the MedQA dataset."""
 
     input_model: typ.Type[MedDecDataModel] = MedDecDataModel
-    output_model: typ.Type[BaseDataModel] = BaseDataModel
+    output_model: typ.Type[BaseInferenceModel] = BaseInferenceModel
 
     @classmethod
-    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseDataModel:
+    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseInferenceModel:
         """Adapt a row."""
 
         def _format_row(row: dict[str, typ.Any], options: DatasetOptions) -> dict[str, typ.Any]:
