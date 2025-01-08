@@ -12,6 +12,7 @@ import torch
 import transformers
 from lightning.fabric.loggers.logger import Logger
 from lightning.fabric.wrappers import is_wrapped
+from lightning.fabric.strategies import FSDPStrategy
 from loguru import logger
 from peft import mapping as peft_mapping
 from peft import utils as peft_utils
@@ -217,6 +218,9 @@ def unwrapped_model(model: T) -> T:
         return model.module  # type: ignore
     return model
 
+def is_fsdp(model: T) -> bool:
+    """Check if the model is wrapped in FSDP."""
+    return isinstance(model._strategy, FSDPStrategy)
 
 def _as_safe_filename(s: T) -> T:
     """Convert a string to a safe filename."""
@@ -634,7 +638,7 @@ def list2tensor_vectorized(dim_x: int, dim_y: int, indices: list[set[int | float
 def summon_params_if_fsdp(func):
     @wraps(func)
     def wrapper(model, *args, **kwargs):
-        if isinstance(model, FSDP):
+        if is_fsdp(model) and not model.training:
             with FSDP.summon_full_params(model):
                 return func(model, *args, **kwargs)
         return func(model, *args, **kwargs)

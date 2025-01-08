@@ -362,8 +362,8 @@ def _lm_forward(
     return output
 
 
-@unwrap_model_if_wrapped
 @summon_params_if_fsdp
+@unwrap_model_if_wrapped
 def _lm_generate(
     model: transformers.PreTrainedModel,
     input_ids: torch.Tensor,
