@@ -12,6 +12,8 @@ from lightning.fabric.wrappers import is_wrapped
 from loguru import logger
 from rich import progress
 from transformers.generation import stopping_criteria as generate_stops
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
 
 from tools.chrono import Chrono
 from tools.pbar import IterProgressBar
@@ -294,16 +296,17 @@ def evaluate(
         # NOTE: Unwrapping the model required to avoid problems with accessing other methods than `.forward()`
         #       This might not work with sharded strategies.
         if generate:
-            preds_input_ids = _lm_generate(
-                unwrapped_model(model),
-                batch["prompt_input_ids"],
-                batch["prompt_attention_mask"],
-                generation_config=generation_config,
-                pad_token_id=tokenizer.eos_token_id,
-                max_new_tokens=max_new_tokens,
-                stopping_criteria=stopping_criteria,
-                logits_processors=logits_processors,
-            )
+            with FSDP.summon_full_params(model):
+                preds_input_ids = _lm_generate(
+                    unwrapped_model(model),
+                    batch["prompt_input_ids"],
+                    batch["prompt_attention_mask"],
+                    generation_config=generation_config,
+                    pad_token_id=tokenizer.eos_token_id,
+                    max_new_tokens=max_new_tokens,
+                    stopping_criteria=stopping_criteria,
+                    logits_processors=logits_processors,
+                )
         else:
             preds_input_ids = None
         # Run a forward pass
@@ -346,12 +349,14 @@ def _lm_forward(
         ) from exc
 
     # Forward pass with the language model
-    output = model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        labels=labels,
-        use_cache=False,
-    )
+    
+    with FSDP.summon_full_params(model):
+        output = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+            use_cache=False,
+        )
     prompt_loss = _masked_lm_loss(labels, (labels_mask > 0) & (token_type_ids == 0), output["logits"])
     target_loss = _masked_lm_loss(labels, token_type_ids > 0, output["logits"])
     loss = lm_prompt_weight * prompt_loss + target_loss
@@ -369,6 +374,7 @@ def _lm_generate(
     stopping_criteria: None | generate_stops.StoppingCriteriaList = None,
     logits_processors: None | transformers.LogitsProcessorList = None,
 ) -> torch.Tensor:
+    
     generated_ids = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
