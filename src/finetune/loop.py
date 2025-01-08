@@ -349,14 +349,12 @@ def _lm_forward(
         ) from exc
 
     # Forward pass with the language model
-    
-    with FSDP.summon_full_params(model):
-        output = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels,
-            use_cache=False,
-        )
+    output = model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        labels=labels,
+        use_cache=False,
+    )
     prompt_loss = _masked_lm_loss(labels, (labels_mask > 0) & (token_type_ids == 0), output["logits"])
     target_loss = _masked_lm_loss(labels, token_type_ids > 0, output["logits"])
     loss = lm_prompt_weight * prompt_loss + target_loss
