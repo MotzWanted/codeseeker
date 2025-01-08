@@ -4,7 +4,7 @@ import pydantic
 
 
 from dataloader.adapt.base import Adapter, BaseTrainingModel, BaseInferenceModel
-from dataloader.adapt.utils import sample_negatives, shuffle_classes
+from dataloader.adapt.utils import sample_negatives, shuffle_classes, sort_classes_alphabetically
 from dataloader.base import DatasetOptions
 
 
@@ -49,12 +49,13 @@ class MimicIvInferenceAdapter(Adapter):
                 options.hard_negatives,
                 struct_row.negatives,
             )
-            _, shuffled_classes, shuffled_targets = shuffle_classes(code2class, [struct_row.codes], options.seed)
+            order_fn = {"alphabetical": sort_classes_alphabetically, "random": shuffle_classes}[options.order]
+            _, ordered_classes, ordered_targets = order_fn(code2class, [struct_row.codes], options.seed)
             return {
                 "aid": f"{struct_row.subject_id}_{struct_row.hadm_id}_{struct_row.note_id}",
-                "classes": shuffled_classes,
+                "classes": ordered_classes,
                 "segments": [struct_row.text],
-                "targets": shuffled_targets,
+                "targets": ordered_targets,
                 "index2code": {str(idx): code for idx, code in enumerate(code2class, start=1)},
             }
 
@@ -82,15 +83,15 @@ class MimicIvForTrainingAdapter(Adapter):
                 options.hard_negatives,
                 struct_row.negatives,
             )
-            shuffled_codes, shuffled_classes, shuffled_targets = shuffle_classes(
-                code2class, [struct_row.codes], options.seed
-            )
+            order_fn = {"alphabetical": sort_classes_alphabetically, "random": shuffle_classes}[options.order]
+            ordered_codes, ordered_classes, ordered_targets = order_fn(code2class, [struct_row.codes], options.seed)
+
             return {
                 "aid": f"{struct_row.subject_id}_{struct_row.hadm_id}_{struct_row.note_id}",
-                "classes": shuffled_classes,
+                "classes": ordered_classes,
                 "segments": struct_row.text,
-                "targets": shuffled_targets[0],
-                "codes": shuffled_codes,
+                "targets": ordered_targets[0],
+                "codes": ordered_codes,
             }
 
         formatted_row = _format_row(row, options)

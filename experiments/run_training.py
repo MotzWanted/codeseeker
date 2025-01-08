@@ -17,6 +17,10 @@ from prompt_poet import Prompt
 from rich.table import Table
 from torch.utils import data as torch_data
 from wandb.integration.lightning.fabric import WandbLogger
+from lightning.fabric.strategies import FSDPStrategy
+import torch.nn as nn
+from torch.distributed.fsdp import BackwardPrefetch
+from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 
 import dataloader
 from dataloader import mimiciv
@@ -39,28 +43,29 @@ DATASET_CONFIGS: dict[str, dict] = {
     "debug": {
         "identifier": "mimic-iv",
         "name_or_path": mimiciv,
-        "subsets": ["icd10cm-3.1"],
+        "subsets": ["icd10cm-3.0"],
         "options": {
             "negatives": 100,
             "subset_size": 300,
             "segmenter": SEGMENTER,
             "adapter": "MimicIvForTrainingAdapter",
+            "order": "alphabetical",
         },
     },
-    "mimic-iv-3.4": {
+    "mimic-iv-3.0": {
         "identifier": "mimic-iv",
         "name_or_path": mimiciv,
-        "subsets": ["icd10cm-3.4"],
+        "subsets": ["icd10cm-3.0"],
         "options": {
             "negatives": 100,
             "segmenter": SEGMENTER,
             "adapter": "MimicIvForTrainingAdapter",
         },
     },
-    "mimic-iv-3.1-hard-neg": {
+    "mimic-iv-3.0-hard-neg": {
         "identifier": "mimic-iv",
         "name_or_path": mimiciv,
-        "subsets": ["icd10cm-3.1"],
+        "subsets": ["icd10cm-3.0"],
         "options": {
             "negatives": 100,
             "hard_negatives": 1.0,
@@ -75,12 +80,12 @@ class Arguments(BaseSettings):
     """Script arguments."""
 
     project_name: str = "icd10cm"
-    dataset: str = "mimic-iv-3.4"
+    dataset: str = "mimic-iv-3.0-hard-neg"
 
     version: str = "v1"
-    backbone: str = "meta-llama/Llama-3.3-70B-Instruct"
-    output_path: str = Path("~/research/models/{version}-{backbone}-align-soft-neg-5k").expanduser().as_posix()
-    debug: int = 1
+    backbone: str = "meta-llama/Llama-3.1-70B-Instruct"
+    output_path: str = Path("~/research/models/{version}-{backbone}-align").expanduser().as_posix()
+    debug: int = 0
     # Training details
     prompt_name: str = "icdcm_v2_it"  # lookup in `src/alignment/templates`
     logits_processor: functools.partial[OutlinesLogitsProcessor] | None = None
@@ -99,10 +104,10 @@ class Arguments(BaseSettings):
     num_epochs: int = 1
     seed: int = 1
     # Training strategy - lightning
-    strategy: str = "ddp"  # "deepspeed" | "dpp" | "fsdp" | "ddp_spawn"
+    strategy: str = "fsdp"  # "deepspeed" | "dpp" | "fsdp" | "ddp_spawn"
     devices: list[int] | int | str = "auto"
     precision: str = "bf16-true"  # bf16-mixed
-    quantize: str = "nf4"  # none | nf4
+    quantize: str = "none" #"nf4"  # none | nf4
     attn: str = "flash_attention_2"
     ckpt: int = 1
     # Generation config: transformers.GenerationConfig
@@ -132,6 +137,20 @@ class Arguments(BaseSettings):
 
 ONLY_DIGITS = re.compile(r"[^0-9]")
 
+# Let's make this a config later on or just throw them
+# into the Arguments class
+FSDP_DEFAULTS = {
+    "sharding_strategy": "FULL_SHARD",
+    "state_dict_type": "full",
+    "sync_module_states": True,
+    "use_orig_params": True,
+    "auto_wrap_policy": ModuleWrapPolicy(
+        {nn.TransformerEncoderLayer, nn.TransformerDecoderLayer}
+    ),
+    "backward_prefetch": BackwardPrefetch.BACKWARD_PRE,
+    "forward_prefetch": False,
+    "cpu_offload": False,
+}
 
 def custom_tojson(value):
     # Use json.dumps with ensure_ascii=False to avoid unnecessary escaping
@@ -148,6 +167,11 @@ def custom_tojson(value):
 
 def run(args: Arguments) -> None:
     """Train a Multi-segment classification model."""
+
+    # Raise an error if the strategy is FSDP and quantization is enabled
+    if args.strategy == "fsdp" and args.quantize != "none":
+        raise ValueError("FSDP does not (currently) support quantization.")
+
     helpers.setup_env()
     output_path = helpers.setup_output_dir(args.output_path, args)
     if helpers.is_global_zero():
@@ -162,9 +186,14 @@ def run(args: Arguments) -> None:
     # Load the dataset
     data, num_classes = _load_dataset(args, tokenizer=tokenizer)
 
+    if args.strategy == "fsdp":
+        strategy = FSDPStrategy(**FSDP_DEFAULTS)
+    else:
+        strategy = args.strategy
+
     # Load Lightning Fabric
     fabric = helpers.init_fabric(
-        strategy=args.strategy,
+        strategy=strategy,
         precision=args.precision,
         devices=args.devices,
         seed=args.seed,

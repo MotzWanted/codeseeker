@@ -56,6 +56,10 @@ class DatasetOptions(pydantic.BaseModel):
         default=0,
         description="Seed for reproducibility.",
     )
+    order: typ.Literal["alphabetical", "random"] = pydantic.Field(
+        default="random",
+        description="Order of classes.",
+    )
     adapter: None | str = pydantic.Field(default=None, description="Adapter for the dataset.")
     model_config = SettingsConfigDict(arbitrary_types_allowed=True, extra="forbid")
 

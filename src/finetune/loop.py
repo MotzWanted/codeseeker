@@ -12,11 +12,13 @@ from lightning.fabric.wrappers import is_wrapped
 from loguru import logger
 from rich import progress
 from transformers.generation import stopping_criteria as generate_stops
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
 
 from tools.chrono import Chrono
 from tools.pbar import IterProgressBar
 
-from .helpers import unwrapped_model
+from .helpers import unwrapped_model, summon_params_if_fsdp, unwrap_model_if_wrapped
 from .monitor import Monitor
 
 
@@ -295,7 +297,7 @@ def evaluate(
         #       This might not work with sharded strategies.
         if generate:
             preds_input_ids = _lm_generate(
-                unwrapped_model(model),
+                model,
                 batch["prompt_input_ids"],
                 batch["prompt_attention_mask"],
                 generation_config=generation_config,
@@ -329,6 +331,7 @@ def evaluate(
     return metrics
 
 
+@summon_params_if_fsdp
 def _lm_forward(
     model: transformers.PreTrainedModel,
     batch: dict[str, typ.Any],
@@ -359,6 +362,8 @@ def _lm_forward(
     return output
 
 
+@summon_params_if_fsdp
+@unwrap_model_if_wrapped
 def _lm_generate(
     model: transformers.PreTrainedModel,
     input_ids: torch.Tensor,
@@ -369,6 +374,7 @@ def _lm_generate(
     stopping_criteria: None | generate_stops.StoppingCriteriaList = None,
     logits_processors: None | transformers.LogitsProcessorList = None,
 ) -> torch.Tensor:
+    
     generated_ids = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
