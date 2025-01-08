@@ -167,6 +167,11 @@ def custom_tojson(value):
 
 def run(args: Arguments) -> None:
     """Train a Multi-segment classification model."""
+
+    # Raise an error if the strategy is FSDP and quantization is enabled
+    if args.strategy == "fsdp" and args.quantize != "none":
+        raise ValueError("FSDP does not (currently) support quantization.")
+
     helpers.setup_env()
     output_path = helpers.setup_output_dir(args.output_path, args)
     if helpers.is_global_zero():
