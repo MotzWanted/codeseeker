@@ -19,6 +19,8 @@ from peft.tuners import lora
 from transformers.generation import stopping_criteria as generate_stops
 from outlines.processors.base_logits_processor import OutlinesLogitsProcessor
 from outlines.models.transformers import TransformerTokenizer
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from functools import wraps
 
 from finetune.monitor import ClassAggregator, MeanAggregator, Monitor
 
@@ -628,3 +630,20 @@ def list2tensor_vectorized(dim_x: int, dim_y: int, indices: list[set[int | float
     sparse_tensor[row_indices, col_indices] = values
 
     return sparse_tensor
+
+def summon_params_if_fsdp(func):
+    @wraps(func)
+    def wrapper(model, *args, **kwargs):
+        if isinstance(model, FSDP):
+            with FSDP.summon_full_params(model):
+                return func(model, *args, **kwargs)
+        return func(model, *args, **kwargs)
+    return wrapper
+
+def unwrap_model_if_wrapped(func):
+    @wraps(func)
+    def wrapper(model, *args, **kwargs):
+        if is_wrapped(model):
+            model = model.module
+        return func(model, *args, **kwargs)
+    return wrapper

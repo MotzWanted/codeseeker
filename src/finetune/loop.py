@@ -18,7 +18,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from tools.chrono import Chrono
 from tools.pbar import IterProgressBar
 
-from .helpers import unwrapped_model
+from .helpers import unwrapped_model, summon_params_if_fsdp, unwrap_model_if_wrapped
 from .monitor import Monitor
 
 
@@ -296,17 +296,16 @@ def evaluate(
         # NOTE: Unwrapping the model required to avoid problems with accessing other methods than `.forward()`
         #       This might not work with sharded strategies.
         if generate:
-            with FSDP.summon_full_params(model):
-                preds_input_ids = _lm_generate(
-                    unwrapped_model(model),
-                    batch["prompt_input_ids"],
-                    batch["prompt_attention_mask"],
-                    generation_config=generation_config,
-                    pad_token_id=tokenizer.eos_token_id,
-                    max_new_tokens=max_new_tokens,
-                    stopping_criteria=stopping_criteria,
-                    logits_processors=logits_processors,
-                )
+            preds_input_ids = _lm_generate(
+                model,
+                batch["prompt_input_ids"],
+                batch["prompt_attention_mask"],
+                generation_config=generation_config,
+                pad_token_id=tokenizer.eos_token_id,
+                max_new_tokens=max_new_tokens,
+                stopping_criteria=stopping_criteria,
+                logits_processors=logits_processors,
+            )
         else:
             preds_input_ids = None
         # Run a forward pass
@@ -332,6 +331,7 @@ def evaluate(
     return metrics
 
 
+@summon_params_if_fsdp
 def _lm_forward(
     model: transformers.PreTrainedModel,
     batch: dict[str, typ.Any],
@@ -364,6 +364,8 @@ def _lm_forward(
     return output
 
 
+@unwrap_model_if_wrapped
+@summon_params_if_fsdp
 def _lm_generate(
     model: transformers.PreTrainedModel,
     input_ids: torch.Tensor,
