@@ -3,12 +3,11 @@ import pathlib
 import typing as typ
 
 import datasets
-from datasets import fingerprint
 import pydantic
+from datasets import fingerprint
 from pydantic_settings import SettingsConfigDict
 
 from segmenters.base import Segmenter
-
 
 CACHE_DIR = str(pathlib.Path(os.environ.get("CACHE_DIR", "~/.cache/docgen")).expanduser())
 DATASETS_CACHE_PATH = str(pathlib.Path(CACHE_DIR, "datasets"))

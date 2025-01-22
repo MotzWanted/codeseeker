@@ -51,6 +51,60 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 OUTPUT_DIR = Path("data/mimic-iii/processed")
 
 
+TOP_50_MULLENBACH_CODES = {
+    "401.9",
+    "38.93",
+    "428.0",
+    "427.31",
+    "414.01",
+    "96.04",
+    "96.6",
+    "584.9",
+    "250.00",
+    "96.71",
+    "272.4",
+    "518.81",
+    "99.04",
+    "39.61",
+    "599.0",
+    "530.81",
+    "96.72",
+    "272.0",
+    "285.9",
+    "88.56",
+    "244.9",
+    "486",
+    "38.91",
+    "285.1",
+    "36.15",
+    "276.2",
+    "496",
+    "99.15",
+    "995.92",
+    "V58.61",
+    "507.0",
+    "038.9",
+    "88.72",
+    "585.9",
+    "403.90",
+    "311",
+    "305.1",
+    "37.22",
+    "412",
+    "33.24",
+    "39.95",
+    "287.5",
+    "410.71",
+    "276.1",
+    "V45.81",
+    "424.0",
+    "45.13",
+    "V15.82",
+    "511.9",
+    "37.23",
+}
+
+
 def parse_code_dataframe(
     df: pl.DataFrame,
     code_column: str = "diagnosis_codes",
@@ -113,22 +167,8 @@ def main():
 
     # Load the dataframes
     mimic_notes = pl.read_csv(PROJECT_ROOT / "data/mimic-iii/raw/NOTEEVENTS.csv.gz")
-    mimic_diag = pl.read_csv(
-        PROJECT_ROOT / "data/mimic-iii/raw/DIAGNOSES_ICD.csv.gz",
-        schema={
-            "HADM_ID": pl.Int64,
-            "ICD9_CODE": pl.String,
-        },
-        truncate_ragged_lines=True,
-    )
-    mimic_proc = pl.read_csv(
-        PROJECT_ROOT / "data/mimic-iii/raw/PROCEDURES_ICD.csv.gz",
-        schema={
-            "HADM_ID": pl.Int64,
-            "ICD9_CODE": pl.String,
-        },
-        truncate_ragged_lines=True,
-    )
+    mimic_diag = pl.read_csv(PROJECT_ROOT / "data/mimic-iii/raw/DIAGNOSES_ICD.csv.gz", dtypes={"ICD9_CODE": str})
+    mimic_proc = pl.read_csv(PROJECT_ROOT / "data/mimic-iii/raw/PROCEDURES_ICD.csv.gz", dtypes={"ICD9_CODE": str})
 
     # rename the columns
     mimic_notes = mimic_notes.rename(
@@ -156,6 +196,7 @@ def main():
 
     # Format the code type columns
     mimic_diag = mimic_diag.with_columns(diagnosis_code_type=pl.lit("icd9cm"))
+
     mimic_proc = mimic_proc.with_columns(procedure_code_type=pl.lit("icd9pcs"))
 
     # Format the diagnosis codes by adding punctuations
@@ -163,7 +204,7 @@ def main():
         pl.col("diagnosis_codes").map_elements(mimic_utils.reformat_icd9cm_code, return_dtype=pl.Utf8)
     )
     mimic_proc = mimic_proc.with_columns(
-        pl.col("procedure_codes").map_elements(mimic_utils.reformat_icd9pcs_code, return_dtype=pl.Utf8)
+        pl.col("procedure_codes").map_elements(mimic_utils.reformat_icd9cm_code, return_dtype=pl.Utf8)
     )
 
     # Process codes and notes
@@ -180,11 +221,27 @@ def main():
     )
     mimic_notes = parse_notes_dataframe(mimic_notes)
     mimic_codes = mimic_diag.join(mimic_proc, on=mimic_utils.ID_COLUMN, how="full", coalesce=True)
+
+    mimic_codes = mimic_codes.with_columns(
+        pl.concat_list([pl.col("diagnosis_codes").fill_null([]), pl.col("procedure_codes").fill_null([])])
+        .map_elements(lambda x: list(set(x)), return_dtype=pl.List(pl.Utf8))  # Ensure uniqueness
+        .alias("codes")
+    )
+
     mimiciii = mimic_notes.join(mimic_codes, on=mimic_utils.ID_COLUMN, how="inner")
 
+    # remove rare codes
+    mimiciii_clean = mimic_utils.remove_rare_codes(mimiciii, ["codes"], 10)
+    mimiciii_50 = mimiciii.with_columns(
+        pl.col("codes")
+        .map_elements(lambda x: [code for code in x if code in TOP_50_MULLENBACH_CODES], return_dtype=pl.List(pl.Utf8))
+        .alias("codes")
+    ).filter(pl.col("codes").map_elements(len) > 0)
     # save files to disk
     logger.info(f"Saving the MIMIC-III dataset to {OUTPUT_DIR}")
-    mimiciii.write_parquet(OUTPUT_DIR / "mimiciii.parquet")
+    mimiciii.write_parquet(OUTPUT_DIR / "mimiciii_full.parquet")
+    mimiciii_50.write_parquet(OUTPUT_DIR / "mimiciii_50.parquet")
+    mimiciii_clean.write_parquet(OUTPUT_DIR / "mimiciii_clean.parquet")
 
 
 if __name__ == "__main__":

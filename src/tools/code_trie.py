@@ -1,10 +1,11 @@
 import csv
-from dataclasses import dataclass
-
-from dataclasses import field
-from random import shuffle
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from pathlib import Path
+from random import shuffle
 from typing import Dict, List, Optional
+
+import dill
 import polars as pl
 from rich.progress import track
 
@@ -65,6 +66,34 @@ class ICD(Node):
 
 
 class Trie:
+    _cache_dir = Path("~/.cache/tries").expanduser()
+    _cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def __reduce__(self):
+        # Define how to reconstruct the object during unpickling
+        return (self.__class__, (), self.__dict__)
+
+    @classmethod
+    def set_cache_dir(cls, path: str | Path) -> None:
+        """Set the cache directory for Trie instances."""
+        cls._cache_dir = Path(path)
+        cls._cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def save_to_cache(self, cache_key: str) -> None:
+        """Save the trie instance to cache."""
+        cache_path = self._cache_dir / f"{cache_key}.pkl"
+        with open(cache_path, "wb") as f:
+            dill.dump(self, f)
+
+    @classmethod
+    def load_from_cache(cls, cache_key: str) -> Optional["Trie"]:
+        """Load a trie instance from cache if it exists."""
+        cache_path = cls._cache_dir / f"{cache_key}.pkl"
+        if cache_path.exists():
+            with open(cache_path, "rb") as f:
+                return dill.load(f)
+        return None
+
     def __init__(self) -> None:
         self.roots: List[str] = []
         self.all: Dict[str, Node] = {}
@@ -198,10 +227,11 @@ class XMLTrie(Trie):
         trie = XMLTrie()
         code_root_id = f"{coding_system}"
         if "icd10cm" in coding_system:
-            trie = XMLTrie.parse_tabular(trie, root, code_root_id)
+            return XMLTrie.parse_tabular(trie, root, code_root_id)
         elif "icd10pcs" in coding_system:
-            trie = XMLTrie.parse_table(trie, root, code_root_id)
-        return trie
+            return XMLTrie.parse_table(trie, root, code_root_id)
+        else:
+            raise ValueError(f"Unknown coding system: {coding_system}")
 
     @staticmethod
     def parse_table(trie: Trie, root: ET.Element, root_node_id: str) -> "XMLTrie":
@@ -276,9 +306,25 @@ class XMLTrie(Trie):
         return trie
 
     @staticmethod
-    def from_xml_file(file_path: str, coding_system: str) -> "XMLTrie":
+    def from_xml_file(file_path: str, coding_system: str, use_cache: bool = True) -> "XMLTrie":
+        cache_key = f"xmltrie_{coding_system}_{Path(file_path).stem}"
+        cache_path = XMLTrie._cache_dir / f"{cache_key}.pkl"
+        if use_cache and cache_path.exists():
+            # Create a cache key based on the file path and coding system
+            cache_key = f"xmltrie_{coding_system}_{Path(file_path).stem}"
+            cached_trie = XMLTrie.load_from_cache(cache_key)
+            if cached_trie is not None:
+                return cached_trie
+
+        # If no cache exists or use_cache is False, create new trie
         root = ET.parse(file_path).getroot()
-        return XMLTrie.from_xml(root, coding_system)
+        trie = XMLTrie.from_xml(root, coding_system)
+
+        # Cache the result if caching is enabled
+        if use_cache:
+            trie.save_to_cache(cache_key)
+
+        return trie
 
     @staticmethod
     def _parse_diag(trie: "XMLTrie", diag: ET.Element, parent_code: Optional[str] = None) -> None:
@@ -345,7 +391,7 @@ class XMLTrie(Trie):
                 nodes = new_nodes
 
 
-def get_hard_negatives_for_code(code: str, trie: Trie, num: int | None = None) -> List[str]:
+def get_hard_negatives_for_code(code: str, trie: Trie, num: int | None = None, seed: int = 42) -> List[str]:
     """Gets hard negatives for a given code by going one level up in the trie."""
     seen_codes = set([code])
 
@@ -372,7 +418,7 @@ def get_hard_negatives_for_code(code: str, trie: Trie, num: int | None = None) -
         truncated_code = code[:3]
         hard_negatives = _extract_negatives_from_node(truncated_code)
 
-    shuffle(hard_negatives)
+    shuffle(hard_negatives, random_state=seed)
     return hard_negatives if num is None else hard_negatives[:num]
 
 
@@ -399,9 +445,32 @@ def add_hard_negatives_to_set(
     return data
 
 
+def get_random_negatives_for_codes(codes: list[str], trie: Trie, num: int, seed: int = 42) -> List[str]:
+    """
+    Get soft negatives for a given code. These are codes that are not parents, children,
+    or the code itself.
+
+    Args:
+        code (str): The code to find soft negatives for.
+        trie (Trie): The trie containing all the codes and their relationships.
+        num (int | None): The number of soft negatives to return. If None, return all.
+
+    Returns:
+        List[str]: A list of soft negative codes.
+    """
+    # Get all nodes that are parents, children, or the node itself
+    excluded_codes = set(codes)
+
+    # Find all codes in the trie, excluding the ones from the excluded set
+    soft_negatives = [n.code for n in trie.all.values() if n.code not in excluded_codes and isinstance(n, Node)]
+
+    shuffle(soft_negatives, random_state=seed)
+    return soft_negatives[:num]
+
+
 if __name__ == "__main__":
     xml_trie = XMLTrie.from_xml_file(
-        "/nfs/nas/mlrd/datasets/medical_coding_systems/icd10cm_2023/icd10cm_tabular_2023.xml",
+        Path(__file__).parent.parent.parent / "data/medical-coding-systems/icd" / "icd10cm_tabular_2025.xml",
         coding_system="icd10cm",
     )
     print(f"Number of nodes: {len(xml_trie.all)}")
@@ -416,7 +485,7 @@ if __name__ == "__main__":
     print(f"Code {test_code} corresponds to: {text_for_code}")
 
     xml_trie = XMLTrie.from_xml_file(
-        "/nfs/nas/mlrd/datasets/medical_coding_systems/icd10pcs_2023/icd10pcs_tables_2023.xml",
+        Path(__file__).parent.parent.parent / "data/medical-coding-systems/icd" / "icd10pcs_tables_2025.xml",
         coding_system="icd10pcs",
     )
     print(f"Number of nodes: {len(xml_trie.all)}")

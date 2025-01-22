@@ -3,13 +3,12 @@ from __future__ import annotations
 import typing
 
 import datasets
-from pydantic_settings import BaseSettings, SettingsConfigDict
 import rich
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from dataloader import meddec, snomed, mdace_inpatient
 import dataloader
+from dataloader import mdace_inpatient, meddec, mimiciii_50, mimiciv, mimiciv_50, snomed
 from dataloader.base import DatasetConfig
-from dataloader import mimiciv
 from segmenters.base import factory
 
 
@@ -105,13 +104,24 @@ DATASET_CONFIGS = {
         "name_or_path": my_loader,
         "path": my_loader,
     },
+    "mimic-iii-50": {
+        "identifier": "mimic-iii-50",
+        "name_or_path": mimiciii_50,
+        "options": {"segmenter": SEGMENTER, "adapter": "MimicForTrainingAdapter"},
+    },
+    "mimic-iv-50": {
+        "identifier": "mimic-iv-50",
+        "name_or_path": mimiciv_50,
+        "subsets": ["icd10"],
+        "options": {"segmenter": SEGMENTER, "adapter": "MimicForTrainingAdapter"},
+    },
 }
 
 
 class Arguments(BaseSettings):
     """Arguments for the script."""
 
-    name: str = "mimic-iv"
+    name: str = "mimic-iv-50"
 
     model_config = SettingsConfigDict(cli_parse_args=True, frozen=True)
 
@@ -122,7 +132,7 @@ def run(args: Arguments) -> None:
         config = DatasetConfig(**DATASET_CONFIGS[args.name])
     except KeyError as exc:
         raise KeyError(f"Configuration for `{args.name}` not found!") from exc
-
+    config.options.prep_map_kws = {"num_proc": 16, "load_from_cache_file": False}
     dset = dataloader.load_dataset(config)
     rich.print(dset)
 

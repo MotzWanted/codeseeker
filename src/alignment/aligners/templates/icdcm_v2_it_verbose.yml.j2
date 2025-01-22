@@ -15,7 +15,7 @@
   content: |
     ====== ICD Codes ======
     {% for key, value in classes.items() %}
-    ID: {{ loop.index }} | Description: {{ custom_tojson(value) }} | ID END: {{ loop.index }}
+    ID: {{ loop.index }} | Code: "{{ key }}" | Description: {{ custom_tojson(value) }} | ID END: {{ loop.index }}
     {% endfor %}
 
 - name: new input

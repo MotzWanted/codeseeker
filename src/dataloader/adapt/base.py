@@ -18,26 +18,35 @@ class BaseTrainingModel(pydantic.BaseModel):
     """Fewshot model."""
 
     aid: str
-    classes: list[str]
     segments: str
-    targets: list[int]
-    codes: list[str] = pydantic.Field(..., description="Look up table for classes.")
+    targets: list[str]
+    classes: dict[str, str] = pydantic.Field(..., description="Look up table for classes.")
 
     @pydantic.field_validator("targets", mode="after")
     def order_target_indices(cls, v: list[int]) -> list[int]:
         """Order the target indices from smallest to largest."""
+        if len(set(v)) < len(v):
+            raise ValueError(f"The target indices must be unique: {v}")
         return sorted(v)
 
     @pydantic.model_validator(mode="after")
     def validate_codes_and_classes(self):
         """Validate the codes and classes."""
-        if len(self.classes) != len(self.codes):
-            raise ValueError("The number of classes and codes must be the same.")
+        for target in self.targets:
+            if target not in self.classes:
+                raise ValueError(f"The target {target} is not in the classes.")
         return self
 
-    def parse_targets(self) -> str:
+    def parse_targets(self, shuffle: bool = False, seed: int = 42) -> str:
         """Parse the targets."""
-        return f"{','.join(str(i) for i in self.targets)}"
+        keys_list = list(self.classes.keys())
+        if shuffle:
+            random.shuffle(keys_list, seed=seed)
+        return f"{','.join(str(keys_list.index(i)+1) for i in self.targets)}"
+
+    def decode_targets(self, indexes: list[int]) -> list[str]:
+        """Decode the targets."""
+        return [self.classes[index] for index in indexes]
 
 
 class BaseInferenceModel(pydantic.BaseModel):

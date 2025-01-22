@@ -1,5 +1,6 @@
 import secrets
 import typing
+from collections import OrderedDict
 from random import Random
 
 import datasets
@@ -189,20 +190,19 @@ def shuffle_classes(
     return shuffled_keys, shuffled_values, shuffled_targets
 
 
-def sort_classes_alphabetically(
-    classes: dict[str, str], targets: list[list[str]], seed: int
-        ) -> tuple[list[str], list[str]]:
+def shuffle_classes_randomly(classes: dict[str, str], seed: int) -> OrderedDict[str, str]:
+    """Shuffle classes randomly."""
+    shuffled_keys = list(classes.keys())
+    rng = Random(seed)
+    rng.shuffle(shuffled_keys)
+    shuffled_values = [classes[key] for key in shuffled_keys]
+    return OrderedDict(zip(shuffled_keys, shuffled_values))
+
+
+def sort_classes_alphabetically(classes: dict[str, str], seed: int) -> OrderedDict[str, str]:
     """Sort classes alphabetically."""
-    sorted_keys = sorted(classes.keys())
-    sorted_values = [classes[key] for key in sorted_keys]
-    id_to_sorted_index = {key: index for index, key in enumerate(sorted_keys, start=1)}
-    sorted_targets = []
-    for inner_list in targets:
-        if inner_list:
-            sorted_targets.append([id_to_sorted_index[key] for key in inner_list])
-        else:
-            sorted_targets.append([0])
-    return sorted_keys, sorted_values, sorted_targets
+
+    return OrderedDict(sorted(classes.items()))
 
 
 def create_labels(

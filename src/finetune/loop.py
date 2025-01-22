@@ -1,3 +1,4 @@
+from collections import defaultdict
 import functools
 import math
 import re
@@ -6,20 +7,49 @@ import typing as typ
 
 import lightning as L
 import torch
-from torch.utils.data import DataLoader
 import transformers
+import wandb
+from lightning.fabric.strategies import FSDPStrategy
 from lightning.fabric.wrappers import is_wrapped
 from loguru import logger
 from rich import progress
-from transformers.generation import stopping_criteria as generate_stops
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-
+from torch.utils.data import DataLoader
+from transformers.generation import stopping_criteria as generate_stops
 
 from tools.chrono import Chrono
 from tools.pbar import IterProgressBar
 
-from .helpers import unwrapped_model, summon_params_if_fsdp, unwrap_model_if_wrapped
-from .monitor import Monitor
+from finetune.monitor import Monitor
+
+T = typ.TypeVar("T")
+
+
+def summon_params_if_fsdp(func):
+    @functools.wraps(func)
+    def wrapper(model, *args, **kwargs):
+        # Only summon params if it's a generate() call and model is in eval mode
+        if is_fsdp(model) and not model.training and func.__name__ == "_lm_generate":
+            with FSDP.summon_full_params(model, offload_to_cpu=True):
+                return func(model, *args, **kwargs)
+        return func(model, *args, **kwargs)
+
+    return wrapper
+
+
+def unwrap_model_if_wrapped(func):
+    @functools.wraps(func)
+    def wrapper(model, *args, **kwargs):
+        if is_wrapped(model):
+            model = model.module
+        return func(model, *args, **kwargs)
+
+    return wrapper
+
+
+def is_fsdp(model: T) -> bool:
+    """Check if the model is wrapped in FSDP."""
+    return isinstance(model._strategy, FSDPStrategy)
 
 
 def training(
@@ -112,6 +142,14 @@ def training(
     train_monitor.reset()
     fabric.call("on_fit_start", step=step, model=model)
     epoch_length = len(train_dataloader)
+    samples_table = (
+        wandb.Table(columns=["Run", "Step", "prompt", "Targets", "Predictions"]) if fabric.is_global_zero else None
+    )
+    per_class_table = (
+        wandb.Table(columns=["idx", "code", "desc", "freq", "tp", "fp", "fn", "f1_macro"])
+        if fabric.is_global_zero
+        else None
+    )
 
     try:
         for epoch in range(num_epochs):
@@ -160,6 +198,8 @@ def training(
 
                     # Evaluate
                     if step % eval_freq == 0:
+                        batch = None
+                        torch.cuda.empty_cache()
                         model.eval()
                         fabric.call("on_validation_start", step=step)
                         evaluate_fn = functools.partial(
@@ -191,6 +231,28 @@ def training(
                                 tokenizer=tokenizer, dataloader=valid_dataloader, generation_config=generation_config
                             )
                         if fabric.is_global_zero:
+                            records_data = eval_metrics_.pop("sample-predictions")
+                            for prompt, target, prediction in zip(
+                                records_data["prompt"], records_data["targets"], records_data["predictions"]
+                            ):
+                                samples_table.add_data(fabric.loggers[1].name, step, prompt, target, prediction)
+                            fabric.log("eval/samples", samples_table)
+                            table = eval_metrics_.pop("table")
+                            metrics_to_add = [table[col] for col in per_class_table.columns]
+                            for row in zip(*metrics_to_add):
+                                per_class_table.add_data(*row)
+                            fabric.log(
+                                "eval/per-class-metrics",
+                                per_class_table,
+                            )
+                            multi_line_chart = wandb.plot.line_series(
+                                xs=per_class_table.get_column("Step"),
+                                ys=per_class_table.get_column("f1_macro"),
+                                keys=per_class_table.get_column("Code"),
+                                title="Per Class F1-Macro",
+                                xname="Step",
+                            )
+                            fabric.log("eval/f1_macro_multi", multi_line_chart)
                             fabric.log_dict({f"eval/{k}": v for k, v in eval_metrics_.items()}, step=step)
                         eval_metrics.update(eval_metrics_)
                         fabric.call("on_validation_end", step=step, model=model, metrics=eval_metrics)
@@ -287,6 +349,7 @@ def evaluate(
     valid_task = pbar.add_task(task_type, total=n_eval_steps, info=f"0/{n_eval_steps}")
     monitor.reset()
     start_time = time.perf_counter()
+    generated_samples = defaultdict(list)
     for it, batch in enumerate(dataloader):
         if it > n_eval_steps:
             break
@@ -315,18 +378,20 @@ def evaluate(
 
         # Do something with the model output
         fabric.call(f"on_{task_type}_batch_end", batch=batch, output=output, step=step)  # TODO: Fix this
-
-        # Update the validation metrics
+        if fabric.is_global_zero and it <= 10:
+            tmp_samples = _get_samples_record(tokenizer, batch, output)
+            for k, v in tmp_samples.items():
+                generated_samples[k].extend(v)
         monitor.update(**batch, **output)
 
         # Update the progress bar
         pbar.update(valid_task, completed=it, info=f"{1+it}/{n_eval_steps}")
-
     # Remove the progress bar
     pbar.remove_task(valid_task)
 
     # Compute the metrics and return
     metrics = monitor.compute()
+    metrics["sample-predictions"] = generated_samples
     metrics["elapsed_time"] = time.perf_counter() - start_time  # type: ignore
     return metrics
 
@@ -374,7 +439,6 @@ def _lm_generate(
     stopping_criteria: None | generate_stops.StoppingCriteriaList = None,
     logits_processors: None | transformers.LogitsProcessorList = None,
 ) -> torch.Tensor:
-    
     generated_ids = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
@@ -457,3 +521,41 @@ def _flatten_dict(x: dict[str, dict]) -> dict[str, typ.Any]:
             out[k] = v
 
     return out
+
+
+def _get_samples_record(
+    tokenizer: transformers.PreTrainedTokenizerBase,
+    batch: dict[str, torch.Tensor],
+    output: dict[str, torch.Tensor],
+) -> list[dict[str, typ.Any]]:
+    """Get the samples record."""
+    prompts = tokenizer.batch_decode(batch["prompt_input_ids"], skip_special_tokens=True)
+    targets = tokenizer.batch_decode(batch["target_input_ids"], skip_special_tokens=True)
+    predictions = tokenizer.batch_decode(output["preds_input_ids"], skip_special_tokens=True)
+    return {"prompt": prompts, "codes": batch["targets"], "targets": targets, "predictions": predictions}
+
+
+def _get_occurences_table(predictions: list[int], targets: list[int]) -> wandb.Table:
+    """Get the occurrences table."""
+    # Prepare data for two bars per class
+    data = []
+    for cls_id, (t_count, p_count) in enumerate(zip(targets, predictions)):
+        data.append([cls_id, "Targets", t_count])
+        data.append([cls_id, "Predictions", p_count])
+
+    # Create the table
+    return wandb.Table(data=data, columns=["Class Index", "Type", "Count"])
+
+
+def custom_grouped_bar_chart(predictions: list[int], targets: list[int]) -> None:
+    """Plots a grouped bar chart using W&B and a custom Vega-Lite spec."""
+    # Generate the data table
+    table = _get_occurences_table(predictions, targets)
+    fields = {"label": "Class Index", "category": "Type", "value": "Count"}
+
+    return wandb.plot_table(
+        vega_spec_name="carey/new_chart",
+        data_table=table,
+        fields=fields,
+        string_fields={"title": "Occurrences of Each Class (Targets vs Predictions)"},
+    )

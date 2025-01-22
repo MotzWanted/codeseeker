@@ -1,8 +1,12 @@
 """Modified version of the data_helper_functions.py file from the https://github.com/JoakimEdin/explainable-medical-coding/blob/main/explainable_medical_coding/utils/data_helper_functions.py."""
 
-from copy import copy
+import logging
 import re
+from copy import copy
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 import polars as pl
 from datasets import DatasetDict
 
@@ -397,3 +401,70 @@ def look_up_code_description(code: str, trie: dict) -> str:
     elif procedure_match:
         return trie[code[:4]].desc
     return ""
+
+
+def download_mullenbach_icd9_description() -> pd.DataFrame:
+    """Download the icd9 description file from the mullenbach github repo
+
+    Returns:
+        pd.DataFrame: ICD9 description dataframe
+    """
+    logging.info("Downloading ICD9 description file...")
+    url = "https://raw.githubusercontent.com/jamesmullenbach/caml-mimic/master/mimicdata/ICD9_descriptions"
+    df = pd.read_csv(url, sep="\t", header=None)
+    df.columns = ["icd9_code", "icd9_description"]
+    return df
+
+
+def get_icd9_descriptions(download_dir: Path) -> pd.DataFrame:
+    """Gets the IC  D9 descriptions"""
+    icd9_proc_desc = pd.read_csv(
+        download_dir / "D_ICD_PROCEDURES.csv.gz",
+        compression="gzip",
+        dtype={"ICD9_CODE": str},
+    )
+    icd9_proc_desc = clean_icd9_desc_df(icd9_proc_desc, is_diag=False)
+    icd9_diag_desc = pd.read_csv(
+        download_dir / "D_ICD_DIAGNOSES.csv.gz",
+        compression="gzip",
+        dtype={"ICD9_CODE": str},
+    )
+    icd9_diag_desc = clean_icd9_desc_df(icd9_diag_desc, is_diag=True)
+    icd9_mullenbach_desc = download_mullenbach_icd9_description()
+    icd9_desc = pd.concat([icd9_proc_desc, icd9_diag_desc, icd9_mullenbach_desc])
+    return icd9_desc.drop_duplicates(subset=["icd9_code"])
+
+
+def clean_icd9_desc_df(icd_desc: pd.DataFrame, is_diag: bool) -> pd.DataFrame:
+    """
+    Cleans the ICD9 description dataframe.
+    Args:
+        icd_desc (pd.DataFrame): ICD9 description dataframe to clean
+
+    Returns:
+        pd.DataFrame: Clean ICD9 description dataframe
+    """
+    icd_desc = icd_desc.rename(columns={"ICD9_CODE": "icd9_code", "LONG_TITLE": "icd9_description"})
+    icd_desc["icd9_code"] = icd_desc["icd9_code"].astype(str)
+    icd_desc["icd9_code"] = icd_desc["icd9_code"].apply(lambda code: reformat_icd9(code, is_diag))
+    return icd_desc[["icd9_code", "icd9_description"]]
+
+
+def reformat_icd9(code: str, is_diag: bool) -> str:
+    """
+    Put a period in the right place because the MIMIC-3 data files exclude them.
+    Generally, procedure codes have dots after the first two digits,
+    while diagnosis codes have dots after the first three digits.
+    """
+    code = "".join(code.split("."))
+    if is_diag:
+        if code.startswith("E"):
+            if len(code) > 4:
+                return code[:4] + "." + code[4:]
+        else:
+            if len(code) > 3:
+                return code[:3] + "." + code[3:]
+    else:
+        if len(code) > 2:
+            return code[:2] + "." + code[2:]
+    return code

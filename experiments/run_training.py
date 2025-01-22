@@ -1,31 +1,40 @@
 """Trains the alignment model."""
 
+from collections import OrderedDict
 import functools
 import json
-from pathlib import Path
 import re
 import typing as typ
+from pathlib import Path
 
 import datasets
 import pydantic
-from pydantic_settings import BaseSettings
 import rich
 import torch
 import transformers
-from loguru import logger
-from prompt_poet import Prompt
-from rich.table import Table
-from torch.utils import data as torch_data
-from wandb.integration.lightning.fabric import WandbLogger
+from jinja2 import Environment, FileSystemLoader
 from lightning.fabric.strategies import FSDPStrategy
-import torch.nn as nn
+from loguru import logger
+from outlines.processors.base_logits_processor import OutlinesLogitsProcessor
+from peft.tuners.lora.layer import LoraLayer
+from prompt_poet import Prompt
+from pydantic_settings import BaseSettings
+from rich.table import Table
+from torch import nn
 from torch.distributed.fsdp import BackwardPrefetch
-from torch.distributed.fsdp.wrap import ModuleWrapPolicy
+from torch.distributed.fsdp.wrap import (
+    transformer_auto_wrap_policy,
+)
+from torch.utils import data as torch_data
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+import wandb
+from wandb.integration.lightning.fabric import WandbLogger
 
 import dataloader
-from dataloader import mimiciv
-from dataloader.base import DatasetConfig
+from alignment.aligners import templates
+from dataloader import mimiciii_50, mimiciv, mimiciv_50
 from dataloader.adapt.base import BaseTrainingModel
+from dataloader.base import DatasetConfig
 from finetune import helpers, loop
 from finetune.callback import PrintCallback
 from finetune.monitor import MeanMonitor
@@ -33,22 +42,18 @@ from tools.exception import dump_exceptions_to_file
 from tools.json_logger import JsonLogger
 from tools.pbar import IterProgressBar
 from tools.pprint import human_format_nb, pprint_parameters_stats
-from outlines.processors.base_logits_processor import OutlinesLogitsProcessor
-
-from alignment.aligners import templates
 
 SEGMENTER = dataloader.factory("document", spacy_model="en_core_web_lg")
 
 DATASET_CONFIGS: dict[str, dict] = {
     "debug": {
         "identifier": "mimic-iv",
-        "name_or_path": mimiciv,
-        "subsets": ["icd10cm-3.0"],
+        "name_or_path": mimiciv_50,
+        "subsets": ["icd10"],
         "options": {
-            "negatives": 100,
             "subset_size": 300,
             "segmenter": SEGMENTER,
-            "adapter": "MimicIvForTrainingAdapter",
+            "adapter": "MimicForTrainingAdapter",
             "order": "alphabetical",
         },
     },
@@ -59,7 +64,7 @@ DATASET_CONFIGS: dict[str, dict] = {
         "options": {
             "negatives": 100,
             "segmenter": SEGMENTER,
-            "adapter": "MimicIvForTrainingAdapter",
+            "adapter": "MimicForTrainingAdapter",
         },
     },
     "mimic-iv-3.0-hard-neg": {
@@ -70,7 +75,23 @@ DATASET_CONFIGS: dict[str, dict] = {
             "negatives": 100,
             "hard_negatives": 1.0,
             "segmenter": SEGMENTER,
-            "adapter": "MimicIvForTrainingAdapter",
+            "adapter": "MimicForTrainingAdapter",
+        },
+    },
+    "mimic-iii-50": {
+        "identifier": "mimic-iii-50",
+        "name_or_path": mimiciii_50,
+        "options": {"segmenter": SEGMENTER, "adapter": "MimicForTrainingAdapter", "order": "alphabetical"},
+    },
+    "mimic-iv-50": {
+        "identifier": "mimic-iv-50",
+        "name_or_path": mimiciv_50,
+        "subsets": ["icd10"],
+        "options": {
+            "segmenter": SEGMENTER,
+            "subset_size": 11_000,
+            "adapter": "MimicForTrainingAdapter",
+            "order": "alphabetical",
         },
     },
 }
@@ -79,12 +100,12 @@ DATASET_CONFIGS: dict[str, dict] = {
 class Arguments(BaseSettings):
     """Script arguments."""
 
-    project_name: str = "icd10cm"
-    dataset: str = "mimic-iv-3.0-hard-neg"
+    project_name: str = "mimic-50"
+    dataset: str = "mimic-iii-50"
 
-    version: str = "v1"
-    backbone: str = "meta-llama/Llama-3.1-70B-Instruct"
-    output_path: str = Path("~/research/models/{version}-{backbone}-align").expanduser().as_posix()
+    version: str = "v2"
+    backbone: str = "meta-llama/Llama-3.2-1B-Instruct"
+    output_path: str = Path("~/research/models/{version}-{backbone}-{dataset}-align").expanduser().as_posix()
     debug: int = 0
     # Training details
     prompt_name: str = "icdcm_v2_it"  # lookup in `src/alignment/templates`
@@ -92,11 +113,11 @@ class Arguments(BaseSettings):
     # functools.partial(
     #     RegexLogitsProcessor, regex_string=r"(?:[1-9]\d{0,3})(?:,(?:[1-9]\d{0,3})){0,39}"
     # )
-    train_size: int = 5_000
+    train_size: int = 7_500
     batch_size: int = 1
     eval_batch_size: int = 1
     micro_batch_size: int = 1
-    gradient_accumulation_steps: int = 4
+    gradient_accumulation_steps: int = 8
 
     lr: float = 1e-5
     weight_decay: float = 1e-1
@@ -104,53 +125,72 @@ class Arguments(BaseSettings):
     num_epochs: int = 1
     seed: int = 1
     # Training strategy - lightning
-    strategy: str = "fsdp"  # "deepspeed" | "dpp" | "fsdp" | "ddp_spawn"
-    devices: list[int] | int | str = "auto"
+    strategy: str = "ddp"  # "deepspeed" | "dpp" | "fsdp" | "ddp_spawn"
+    devices: list[int] | int | str = [0, 1]
     precision: str = "bf16-true"  # bf16-mixed
-    quantize: str = "none" #"nf4"  # none | nf4
+    quantize: str = "none"  # "nf4"  # none | nf4
     attn: str = "flash_attention_2"
     ckpt: int = 1
     # Generation config: transformers.GenerationConfig
     do_sample: bool = False
     # Peft
     peft: str = "LORA"  # none | LORA
-    lora_r: int = 8
-    lora_alpha: int = 16
-    lora_dropout: float = 0.05
-    lora_target_modules: str = ":all-lm_head"
+    lora_r: int = 128
+    lora_alpha: int = 64
+    lora_dropout: float = 0.0
+    lora_target_modules: list[str] = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
     # Loop details
     track_metric: str = "f1_macro"
     tack_mode: str = "max"
     num_workers: int = 16
     log_freq: int = 20
-    eval_freq: int = 10
+    eval_freq: int = 100
     generate_freq: int = -1
     max_eval: int = 1_024
     pbar_keys: str = r"(target_loss)|(f1_micro)"
     # Tokenizer
-    max_new_tokens: int = 64
-    max_length: int = 8_096
-    filter_longer_than: int = 8_000
+    max_new_tokens: int = 48
+    max_length: int = 32_064
+    filter_longer_than: int = 32_000
     padding: str = "longest"
     truncation: int = 1
 
 
 ONLY_DIGITS = re.compile(r"[^0-9]")
 
+
+# Specific to FSDP
+def lora_auto_wrap_policy(module: nn.Module, recurse: bool, nonwrapped_numel: int, **kwargs) -> bool:
+    """Auto-wrap policy for FSDP to wrap only LoRA-specific layers.
+
+    Args:
+        module (nn.Module): The module being evaluated for wrapping.
+        recurse (bool): Whether to recurse into the module's submodules.
+        nonwrapped_numel (int): The number of unwrapped parameters in the current module.
+        **kwargs (Any): Additional arguments for future compatibility.
+
+    Returns:
+        bool: True if the module should be wrapped by FSDP, False otherwise.
+    """
+    return isinstance(module, LoraLayer)
+
+
+LAYERS = {LlamaDecoderLayer}
 # Let's make this a config later on or just throw them
 # into the Arguments class
 FSDP_DEFAULTS = {
     "sharding_strategy": "FULL_SHARD",
-    "state_dict_type": "full",
+    "state_dict_type": "sharded",
     "sync_module_states": True,
     "use_orig_params": True,
-    "auto_wrap_policy": ModuleWrapPolicy(
-        {nn.TransformerEncoderLayer, nn.TransformerDecoderLayer}
-    ),
+    "auto_wrap_policy": functools.partial(transformer_auto_wrap_policy, transformer_layer_cls=LAYERS),
+    "activation_checkpointing_policy": LAYERS,  # enables activation checkpointing for the given layers
     "backward_prefetch": BackwardPrefetch.BACKWARD_PRE,
     "forward_prefetch": False,
-    "cpu_offload": False,
+    "cpu_offload": True,
+    "limit_all_gathers": True,
 }
+
 
 def custom_tojson(value):
     # Use json.dumps with ensure_ascii=False to avoid unnecessary escaping
@@ -167,7 +207,17 @@ def custom_tojson(value):
 
 def run(args: Arguments) -> None:
     """Train a Multi-segment classification model."""
-
+    # if args.debug > 0:
+    # profiler = torch.profiler.profile(
+    #     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+    #     schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=args.log_freq),
+    #     on_trace_ready=helpers.trace_handler,
+    #     record_shapes=True,
+    #     profile_memory=True,
+    #     with_stack=True,
+    #     with_modules=True,
+    # )
+    # profiler.start()
     # Raise an error if the strategy is FSDP and quantization is enabled
     if args.strategy == "fsdp" and args.quantize != "none":
         raise ValueError("FSDP does not (currently) support quantization.")
@@ -182,9 +232,8 @@ def run(args: Arguments) -> None:
 
     # Wrap tokenizer and logits processor
     logits_processor = helpers.maybe_wrap_logits_processor(args.logits_processor, tokenizer)
-
     # Load the dataset
-    data, num_classes = _load_dataset(args, tokenizer=tokenizer)
+    data, classes = _load_dataset(args, tokenizer=tokenizer)
 
     if args.strategy == "fsdp":
         strategy = FSDPStrategy(**FSDP_DEFAULTS)
@@ -197,7 +246,10 @@ def run(args: Arguments) -> None:
         precision=args.precision,
         devices=args.devices,
         seed=args.seed,
-        loggers=[JsonLogger(output_path, remove_existing=True), WandbLogger(project=args.project_name)],  # type: ignore
+        loggers=[
+            JsonLogger(output_path, remove_existing=True),
+            WandbLogger(project=args.project_name, config=args.model_dump()),
+        ],  # type: ignore
         callbacks=[
             helpers.SavePretrainedModelCallback(
                 track_metric=args.track_metric,
@@ -225,7 +277,7 @@ def run(args: Arguments) -> None:
         lora_r=args.lora_r,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
-        lora_target_modules=helpers.get_layer_names(args.lora_target_modules),
+        lora_target_modules=args.lora_target_modules,
     )
     if fabric.is_global_zero:
         rich.print(model)
@@ -287,8 +339,8 @@ def run(args: Arguments) -> None:
 
     # Define the train/valid monitors
     train_monitor = MeanMonitor(keys=["loss", "prompt_loss", "target_loss"])
-    eval_monitor = helpers.ClassificationMonitor(
-        keys=["loss", "prompt_loss", "target_loss"], classes=num_classes, tokenizer=tokenizer
+    eval_monitor = helpers.TrieClassificationMonitor(
+        trie=classes, keys=["loss", "prompt_loss", "target_loss"], tokenizer=tokenizer
     )
 
     # Run the training loop
@@ -318,6 +370,8 @@ def run(args: Arguments) -> None:
             patterns=[tokenizer.eos_token],
         ),
     )
+    # if args.debug > 0:
+    #     profiler.stop()
 
     # Run on the test set
     with IterProgressBar(disable=not fabric.is_global_zero) as pbar:
@@ -340,10 +394,28 @@ def run(args: Arguments) -> None:
                 patterns=[tokenizer.eos_token],
             ),
         )
+    if fabric.is_global_zero:
+        samples_table = wandb.Table(columns=["prompt", "targets", "predictions"]) if fabric.is_global_zero else None
+        per_class_table = wandb.Table(columns=["idx", "code", "desc", "freq", "tp", "fp", "fn", "f1_macro"])
+        records_data = test_metrics.pop("sample-predictions")
+        for prompt, target, prediction in zip(
+            records_data["prompt"], records_data["targets"], records_data["predictions"]
+        ):
+            samples_table.add_data(fabric.loggers[1].name, prompt, target, prediction)
+        fabric.log("test/samples", samples_table)
+        table = test_metrics.pop("table")
+        metrics_to_add = [table[col] for col in per_class_table.columns]
+        for row in zip(*metrics_to_add):
+            per_class_table.add_data(*row)
+        fabric.log(
+            "test/per-class-metrics",
+            per_class_table,
+        )
+        fabric.log_dict({f"test/{k}": v for k, v in test_metrics.items()})
+    rich.print(test_metrics)
     with open(output_path / "test_metrics.json", "w") as f:
         test_metrics = {k: _cast_torch(v) for k, v in test_metrics.items()}
         json.dump(test_metrics, f, indent=2)
-    rich.print(test_metrics)
 
     # Flush logs
     for log in fabric.loggers:
@@ -364,7 +436,7 @@ def _load_dataset(
     args: Arguments,
     *,
     tokenizer: transformers.PreTrainedTokenizerBase,
-) -> tuple[datasets.DatasetDict, int]:
+) -> tuple[datasets.DatasetDict, OrderedDict[str, str]]:
     """Load and filter the dataset.
 
     Steps:
@@ -387,7 +459,7 @@ def _load_dataset(
     dset_config.options.prep_map_kws = {"num_proc": args.num_workers}
     data: datasets.DatasetDict = dataloader.load_dataset(dset_config)  # type: ignore
     _validate(data, BaseTrainingModel)
-    num_classes = len(data["train"]["classes"][0])
+    classes = data["train"]["classes"][0]
 
     # Filter examples that exceed the maximum length
     if args.filter_longer_than > 0:
@@ -416,29 +488,29 @@ def _load_dataset(
     if len(data["train"]) > args.train_size:
         data["train"] = data["train"].select(range(args.train_size))
 
+    if args.dataset == "debug":
+        data["test"] = data["test"].select(range(25))
+        data["validation"] = data["validation"].select(range(25))
+
     # Collect stats
     _fmt = functools.partial(human_format_nb, precision=1)
     stats = [
         *({"name": "data", "split": split, "n": _fmt(len(dset))} for split, dset in data.items()),
         *({"name": "filtered_data", "split": split, "n": _fmt(len(dset))} for split, dset in data.items()),
     ]
-    # class_stats = [
-    #     *(
-    #         {"name": "data", "split": split, "class_ballance": pprint_class_balance(dset["targets"])}
-    #         for split, dset in data.items()
-    #     ),
-    #     *(
-    #         {"name": "filtered_data", "split": split, "class_ballance": pprint_class_balance(dset["targets"])}
-    #         for split, dset in data.items()
-    #     ),
-    # ]
 
     # Print the stats
     if helpers.is_global_zero():
         _plot_rich_table(stats, header="Dataset", add_section=lambda i, _: i % len(data) == 0)
-        # _plot_rich_table(class_stats, header="Dataset", add_section=lambda i, _: i % len(data) == 0)
 
-    return data, num_classes
+    return data, classes
+
+
+def _get_dataset(dset: datasets.Dataset | datasets.DatasetDict) -> datasets.Dataset:
+    """Get a `datasets.Dataset`."""
+    if isinstance(dset, datasets.Dataset):
+        return dset
+    return next(iter(dset.values()))
 
 
 D = typ.TypeVar("D", bound=datasets.Dataset | datasets.DatasetDict)
@@ -460,6 +532,27 @@ def _tokenize_and_check_length(
     return encoded.input_ids.shape[-1] <= max_length
 
 
+class _PromptWrapper:
+    """Wrapper around the prompt."""
+
+    PATH_TO_TEMPLATES = Path(templates.__file__).parent
+
+    def __init__(self, prompt_name: str, shuffle_targets: bool = False) -> None:
+        env = Environment(loader=FileSystemLoader(self.PATH_TO_TEMPLATES))
+        loader = typ.cast(FileSystemLoader, env.loader)
+        self.raw_template, self.template_path, _ = loader.get_source(env, f"{prompt_name}.yml.j2")
+        self.shuffle_targets = shuffle_targets
+
+    def __call__(self, row: BaseTrainingModel) -> tuple[str, str]:
+        """Make a training example and format the task as a prompt."""
+        targets = row.parse_targets()
+        prompt = Prompt(
+            raw_template=self.raw_template,
+            template_data={**row.model_dump(), "targets": targets, "custom_tojson": custom_tojson},
+        )
+        return prompt.string, targets
+
+
 def _plot_rich_table(
     data: list[dict[str, typ.Any]],
     header: str,
@@ -476,22 +569,6 @@ def _plot_rich_table(
         table.add_row(*[str(row.get(col, "--")) for col in columns])
 
     rich.print(table)
-
-
-class _PromptWrapper:
-    """Wrapper around the prompt."""
-
-    PATH_TO_TEMPLATES = Path(templates.__file__).parent
-
-    def __init__(self, prompt_name: str):
-        self.template_path = self.PATH_TO_TEMPLATES / f"{prompt_name}.yml.j2"
-        self._core = functools.partial(Prompt, template_path=self.template_path)
-
-    def __call__(self, row: BaseTrainingModel) -> tuple[str, str]:
-        """Make a training example and format the task as a prompt."""
-        targets = row.parse_targets()
-        prompt = self._core(template_data={**row.model_dump(), "targets": targets, "custom_tojson": custom_tojson})
-        return prompt.string, targets
 
 
 class _AlignCollateFn:
@@ -518,6 +595,7 @@ class _AlignCollateFn:
         template: str,
         padding: str = "longest",
         truncation: bool = True,
+        shuffle_targets: bool = False,
         seed: None | int = None,
     ) -> None:
         self.prompt = _PromptWrapper(template)

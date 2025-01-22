@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import functools
 import json
 import os
@@ -12,16 +13,13 @@ import torch
 import transformers
 from lightning.fabric.loggers.logger import Logger
 from lightning.fabric.wrappers import is_wrapped
-from lightning.fabric.strategies import FSDPStrategy
 from loguru import logger
+from outlines.models.transformers import TransformerTokenizer
+from outlines.processors.base_logits_processor import OutlinesLogitsProcessor
 from peft import mapping as peft_mapping
 from peft import utils as peft_utils
 from peft.tuners import lora
 from transformers.generation import stopping_criteria as generate_stops
-from outlines.processors.base_logits_processor import OutlinesLogitsProcessor
-from outlines.models.transformers import TransformerTokenizer
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from functools import wraps
 
 from finetune.monitor import ClassAggregator, MeanAggregator, Monitor
 
@@ -133,7 +131,7 @@ def init_and_wrap_optimizer(
 
         optimizer = PagedAdamW(trainable_params, lr=lr, weight_decay=weight_decay)
     else:
-        optimizer = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
+        optimizer = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay, foreach=False)  # <-- FSDP
     wrapped_optimizer: torch.optim.Optimizer = fabric.setup_optimizers(optimizer)  # type: ignore
 
     # Setup the scheduler
@@ -218,9 +216,6 @@ def unwrapped_model(model: T) -> T:
         return model.module  # type: ignore
     return model
 
-def is_fsdp(model: T) -> bool:
-    """Check if the model is wrapped in FSDP."""
-    return isinstance(model._strategy, FSDPStrategy)
 
 def _as_safe_filename(s: T) -> T:
     """Convert a string to a safe filename."""
@@ -303,7 +298,11 @@ class SavePretrainedModelCallback(Callback):
         return matches[0]
 
     def on_validation_end(
-        self, *, metrics: dict[str, typ.Any], model: transformers.PreTrainedModel, step: None | int = None
+        self,
+        *,
+        metrics: dict[str, typ.Any],
+        model: transformers.PreTrainedModel,
+        step: None | int = None,
     ) -> None:
         """Called at the end of the validation loop."""
         matched_metric = self._search_metric(metrics)
@@ -353,27 +352,28 @@ class PatternStoppingCriteria(generate_stops.StoppingCriteria):
         return False
 
 
-class ClassificationMonitor(Monitor):
+class TrieClassificationMonitor(Monitor):
     """Monitor for classification tasks."""
 
     def __init__(
         self,
-        classes: int,
+        trie: OrderedDict[str, str],
         keys: list[str] = [],
         tokenizer: transformers.PreTrainedTokenizerBase | None = None,
     ) -> None:
         super().__init__()
         self.keys = keys
         self.tokenizer = tokenizer
-        self.classes = classes
+        self.num_classes = len(trie)
+        self.trie = trie
         self.class_aggregators = torch.nn.ModuleDict(
             {
-                **{k: ClassAggregator(classes) for k in ["tp", "fp", "fn", "tn"]},
+                **{k: ClassAggregator(self.num_classes) for k in ["tp", "fp", "fn", "tn"]},
             }
         )
         self.aggregators = torch.nn.ModuleDict(
             {
-                **{k: ClassAggregator(classes) for k in ["tp", "fp", "fn", "tn"]},
+                **{k: ClassAggregator(self.num_classes) for k in ["tp", "fp", "fn", "tn"]},
                 **{k: MeanAggregator() for k in [*self.keys, "_hit", "pos_ratio"]},
             }
         )
@@ -384,7 +384,6 @@ class ClassificationMonitor(Monitor):
         tp = self.aggregators["tp"].get()
         fp = self.aggregators["fp"].get()
         fn = self.aggregators["fn"].get()
-
         # Micro F1
         micro_precision = tp.sum() / (tp.sum() + fp.sum() + 1e-10)
         micro_recall = tp.sum() / (tp.sum() + fn.sum() + 1e-10)
@@ -406,7 +405,8 @@ class ClassificationMonitor(Monitor):
 
         # Classification Metrics
         output["accuracy"] = self.aggregators["_hit"].get()
-        output["positive_ratio"] = self.aggregators["pos_ratio"].get()
+        output["prediction-bias-ratio"] = self.aggregators["pos_ratio"].get()
+        output["table"] = self._make_table_date(f1_per_class, tp, fp, fn, self.aggregators["tn"].get())
         return output
 
     def update(
@@ -429,18 +429,8 @@ class ClassificationMonitor(Monitor):
             preds_input_ids = self._parse_tokens_fn(preds_tokens)
             target_input_ids = self._parse_tokens_fn(target_tokens)
 
-        prediction_matrix = list2tensor_vectorized(len(preds_input_ids), self.classes, preds_input_ids)
-        target_matrix = list2tensor_vectorized(len(target_input_ids), self.classes, target_input_ids)
-
-        if os.environ.get("DEBUG", "0") == "1":
-            import rich
-
-            rich.print(
-                {
-                    "predictions": preds_input_ids,
-                    "targets": target_input_ids,
-                }
-            )
+        prediction_matrix = list2tensor_vectorized(len(preds_input_ids), self.num_classes, preds_input_ids)
+        target_matrix = list2tensor_vectorized(len(target_input_ids), self.num_classes, target_input_ids)
 
         # Compute the true/false negatives/positives
         conf_matrix = self._make_conf_matrix(target_matrix, prediction_matrix)
@@ -475,6 +465,25 @@ class ClassificationMonitor(Monitor):
             "tn": (~_targets & ~_preds).sum(dim=0),
             "_hit": (~(_targets ^ _preds)).all(dim=1).float(),  # counting row wise exact matches
             "pos_ratio": preds.sum() / targets.sum(),
+        }
+
+    def _make_table_date(
+        self, f1_macro: torch.Tensor, tp: torch.Tensor, fp: torch.Tensor, fn: torch.Tensor, tn: torch.Tensor
+    ) -> dict[str, list[int | float]]:
+        """Create a table with the metrics.
+        Table should have columns for various classification metrics."""
+        class_names = list(self.trie.keys())
+        class_values = list(self.trie.values())
+
+        return {
+            "idx": list(range(1, len(class_names) + 1)),
+            "code": class_names,
+            "desc": class_values,
+            "freq": (tp + fn).tolist(),
+            "tp": tp.tolist(),
+            "fp": fp.tolist(),
+            "fn": fn.tolist(),
+            "f1_macro": f1_macro.tolist(),  # Already included
         }
 
 
@@ -634,20 +643,3 @@ def list2tensor_vectorized(dim_x: int, dim_y: int, indices: list[set[int | float
     sparse_tensor[row_indices, col_indices] = values
 
     return sparse_tensor
-
-def summon_params_if_fsdp(func):
-    @wraps(func)
-    def wrapper(model, *args, **kwargs):
-        if is_fsdp(model) and not model.training:
-            with FSDP.summon_full_params(model):
-                return func(model, *args, **kwargs)
-        return func(model, *args, **kwargs)
-    return wrapper
-
-def unwrap_model_if_wrapped(func):
-    @wraps(func)
-    def wrapper(model, *args, **kwargs):
-        if is_wrapped(model):
-            model = model.module
-        return func(model, *args, **kwargs)
-    return wrapper

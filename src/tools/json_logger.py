@@ -29,6 +29,11 @@ class JsonLogger(Logger):
     @rank_zero_only
     def log_metrics(self, metrics: dict[str, float], step: None | int = None) -> None:
         """Records metrics. This method logs metrics as soon as it received them."""
+        filtered_metrics = {k: v for k, v in metrics.items() if isinstance(v, float)}
+
+        # Check if filtered metrics are empty
+        if not filtered_metrics:
+            return
         if step is not None:
             metrics["step"] = step
         with open(self.get_log_file("metrics.jsonl"), "a") as f:

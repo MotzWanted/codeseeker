@@ -1,23 +1,21 @@
-from functools import partial
 import hashlib
 import json
 import pathlib
-import datasets
 import typing as typ
-from loguru import logger
+from functools import partial
+
+import datasets
 import pydantic
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
 import rich
-
-from alignment.aligners.llm import create_llm_aligner
-from alignment.ops import HfAlignment
-import dataloader
-from dataloader.base import DatasetConfig
+from loguru import logger
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from throughster.factory import create_interface
 
+import dataloader
+from alignment.aligners.llm import create_llm_aligner
+from alignment.ops import HfAlignment
+from dataloader.base import DatasetConfig
 from finetune.helpers import ClassificationMonitor
-
 
 # MLFOW_TRACKING_URI = "http://172.16.40.132:5101"
 
@@ -33,8 +31,8 @@ class Arguments(BaseSettings):
     experiment_name: str = "constrained-decoding-lora"
 
     provider: str = "vllm"  # "azure" | "vllm" | "mistral"
-    api_base: str = "http://localhost:6538/v1"
-    deployment: str = "/root/models/hard-neg-meta-llama-Llama-3.2-3B-Instruct-align-merged"
+    api_base: str = "http://localhost:6539/v1"
+    deployment: str = "5K-lora"
     endpoint: typ.Literal["chat/completions", "completions"] = "completions"
 
     prompt_name: str = "icdcm_v2"  # lookup in `src/alignment/templates`
