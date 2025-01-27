@@ -42,6 +42,7 @@ from tools.exception import dump_exceptions_to_file
 from tools.json_logger import JsonLogger
 from tools.pbar import IterProgressBar
 from tools.pprint import human_format_nb, pprint_parameters_stats
+from model.utils import replace_decoder_head_with_label_wise_attention
 
 SEGMENTER = dataloader.factory("document", spacy_model="en_core_web_lg")
 
@@ -154,6 +155,7 @@ class Arguments(BaseSettings):
     filter_longer_than: int = 32_000
     padding: str = "longest"
     truncation: int = 1
+    use_label_wise_attention: bool = False
 
 
 ONLY_DIGITS = re.compile(r"[^0-9]")
@@ -279,6 +281,8 @@ def run(args: Arguments) -> None:
         lora_dropout=args.lora_dropout,
         lora_target_modules=args.lora_target_modules,
     )
+    if args.use_label_wise_attention:
+        model = replace_decoder_head_with_label_wise_attention(model, len(classes), model.config.hidden_size)
     if fabric.is_global_zero:
         rich.print(model)
 

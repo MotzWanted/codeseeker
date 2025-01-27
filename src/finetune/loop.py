@@ -17,6 +17,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader
 from transformers.generation import stopping_criteria as generate_stops
 
+from model.utils import has_label_wise_attention
 from tools.chrono import Chrono
 from tools.pbar import IterProgressBar
 
@@ -420,10 +421,14 @@ def _lm_forward(
         labels=labels,
         use_cache=False,
     )
-    prompt_loss = _masked_lm_loss(labels, (labels_mask > 0) & (token_type_ids == 0), output["logits"])
-    target_loss = _masked_lm_loss(labels, token_type_ids > 0, output["logits"])
-    loss = lm_prompt_weight * prompt_loss + target_loss
-    output = {**output, "prompt_loss": prompt_loss, "target_loss": target_loss, "loss": loss}
+    if has_label_wise_attention(model):
+        loss = _classification_loss(labels, output["logits"])
+        output = {**output, "loss": loss}
+    else:
+        prompt_loss = _masked_lm_loss(labels, (labels_mask > 0) & (token_type_ids == 0), output["logits"])
+        target_loss = _masked_lm_loss(labels, token_type_ids > 0, output["logits"])
+        loss = lm_prompt_weight * prompt_loss + target_loss
+        output = {**output, "prompt_loss": prompt_loss, "target_loss": target_loss, "loss": loss}
     return output
 
 
@@ -462,6 +467,12 @@ def _masked_lm_loss(labels: torch.Tensor, mask: torch.Tensor, logits: torch.Tens
     # Mask the loss and compute the mean
     loss = (mask * loss.view(*mask.shape)).sum(dim=-1) / mask.sum(dim=-1)
     return loss.mean()
+
+def _classification_loss(labels: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+    """
+    The encoder loss must convert the labels to one-hot encoding and compute the cross-entropy loss.
+    """
+    return torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
 
 
 def _iterate_micro_batches(
