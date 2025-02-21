@@ -22,6 +22,7 @@ from peft.tuners import lora
 from transformers.generation import stopping_criteria as generate_stops
 
 from finetune.monitor import ClassAggregator, MeanAggregator, Monitor
+from model.utils import replace_decoder_head_with_label_wise_attention, _get_last_layer
 
 from .callback import Callback
 
@@ -54,6 +55,8 @@ def load_pretrained_lm(
     lora_dropout: float = 0.05,
     lora_target_modules: None | str | list[str] = None,
     resize_token_embeddings: int = -1,
+    use_label_wise_attention: bool = False,
+    num_classes: int = 2,
 ) -> transformers.PreTrainedModel:
     """Load a pretrained language model. Apply quantization and PEFT if requested."""
     if quantize != "none":
@@ -79,8 +82,17 @@ def load_pretrained_lm(
         torch_dtype=_prec_to_dtype(precision) if quant_config is None else None,
         attn_implementation=attn,
     )
-    if resize_token_embeddings:
-        model.resize_token_embeddings(resize_token_embeddings)
+    if use_label_wise_attention:
+        model = replace_decoder_head_with_label_wise_attention(model, num_classes=num_classes, input_size=model.config.hidden_size)
+        if quantize != "none":
+            labelwise_attention_layer = _get_last_layer(model)
+            model.__setattr__(labelwise_attention_layer[0], bnb.quantize_model(
+                labelwise_attention_layer[1],
+                **quant_config,
+                )
+            )
+        if resize_token_embeddings:
+            model.resize_token_embeddings(resize_token_embeddings)
 
     # Cast parameters and register hooks to enable checkpointing
     if quantize != "none":
@@ -110,7 +122,10 @@ def load_pretrained_lm(
                 }
             ),
         )
-
+    if use_label_wise_attention:
+        labelwise_attention_layer = _get_last_layer(model)
+        for param in labelwise_attention_layer[1].parameters():
+            param.requires_grad = True
     return model  # type: ignore
 
 
@@ -126,6 +141,8 @@ def init_and_wrap_optimizer(
 ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler]:
     """Initialize the optimizer and scheduler."""
     trainable_params = [p for p in model.parameters() if p.requires_grad]
+    # CHeck if LM_head is among the trainable parameters
+    # print([p for p in model.lm_head.parameters()])
     if use_paged_optim:
         from bitsandbytes.optim import PagedAdamW  # type: ignore
 
@@ -414,13 +431,15 @@ class TrieClassificationMonitor(Monitor):
         *,
         target_input_ids: None | torch.Tensor | list[set[int]] = None,
         preds_input_ids: None | torch.Tensor | list[set[int]] = None,
+        target: None | torch.Tensor | typ.Any = None,
+        logits: None | torch.Tensor | typ.Any = None,
         **kws: typ.Any,
     ) -> None:
         """Update the metrics."""
         for key in self.keys:
             self.aggregators[key].update(kws[key])
 
-        if target_input_ids is None or preds_input_ids is None:
+        if (target_input_ids is None or preds_input_ids is None) and (target is None or logits is None):
             return
 
         if isinstance(target_input_ids, torch.Tensor) and isinstance(preds_input_ids, torch.Tensor):
@@ -428,6 +447,12 @@ class TrieClassificationMonitor(Monitor):
             preds_tokens = self._tokenize_fn(self.tokenizer, preds_input_ids)
             preds_input_ids = self._parse_tokens_fn(preds_tokens)
             target_input_ids = self._parse_tokens_fn(target_tokens)
+
+        if target is not None:
+            probs = torch.sigmoid(logits)
+            preds_input_ids = torch.where(probs > 0.5, 1, 0)
+            target_input_ids = [row.nonzero().flatten().tolist() for row in target]
+            preds_input_ids = [row.nonzero().flatten().tolist() for row in preds_input_ids]
 
         prediction_matrix = list2tensor_vectorized(len(preds_input_ids), self.num_classes, preds_input_ids)
         target_matrix = list2tensor_vectorized(len(target_input_ids), self.num_classes, target_input_ids)
@@ -497,6 +522,7 @@ class SafeTokenize:
         truncation: bool = False,
         return_tensors: str = "pt",
         strict: typ.Literal["pass", "warn", "raise"] = "pass",
+        use_label_wise_attention: bool = False,
         **kwargs: typ.Any,
     ) -> None:
         self.tokenizer = tokenizer
@@ -506,6 +532,7 @@ class SafeTokenize:
             raise RuntimeError(f"Can only handle `return_tensors='pt'` but got `{return_tensors}`.")
         self.return_tensors = return_tensors
         self.strict = strict
+        self.use_label_wise_attention = use_label_wise_attention
 
     def __call__(self, *args: typ.Any, truncation: None | bool = None, **kwargs: typ.Any) -> dict[str, torch.Tensor]:
         """Tokenize the inputs."""

@@ -42,7 +42,6 @@ from tools.exception import dump_exceptions_to_file
 from tools.json_logger import JsonLogger
 from tools.pbar import IterProgressBar
 from tools.pprint import human_format_nb, pprint_parameters_stats
-from model.utils import replace_decoder_head_with_label_wise_attention
 
 SEGMENTER = dataloader.factory("document", spacy_model="en_core_web_lg")
 
@@ -115,12 +114,12 @@ class Arguments(BaseSettings):
     #     RegexLogitsProcessor, regex_string=r"(?:[1-9]\d{0,3})(?:,(?:[1-9]\d{0,3})){0,39}"
     # )
     train_size: int = 7_500
-    batch_size: int = 1
-    eval_batch_size: int = 1
+    batch_size: int = 2
+    eval_batch_size: int = 2
     micro_batch_size: int = 1
     gradient_accumulation_steps: int = 8
 
-    lr: float = 1e-5
+    lr: float = 0.00002#1e-5
     weight_decay: float = 1e-1
     prompt_loss_weight: float = 0
     num_epochs: int = 1
@@ -155,7 +154,7 @@ class Arguments(BaseSettings):
     filter_longer_than: int = 32_000
     padding: str = "longest"
     truncation: int = 1
-    use_label_wise_attention: bool = False
+    use_label_wise_attention: bool = True
 
 
 ONLY_DIGITS = re.compile(r"[^0-9]")
@@ -250,7 +249,7 @@ def run(args: Arguments) -> None:
         seed=args.seed,
         loggers=[
             JsonLogger(output_path, remove_existing=True),
-            WandbLogger(project=args.project_name, config=args.model_dump()),
+            #WandbLogger(project=args.project_name, config=args.model_dump()),
         ],  # type: ignore
         callbacks=[
             helpers.SavePretrainedModelCallback(
@@ -280,9 +279,9 @@ def run(args: Arguments) -> None:
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         lora_target_modules=args.lora_target_modules,
+        use_label_wise_attention=args.use_label_wise_attention,
+        num_classes=len(classes),
     )
-    if args.use_label_wise_attention:
-        model = replace_decoder_head_with_label_wise_attention(model, len(classes), model.config.hidden_size)
     if fabric.is_global_zero:
         rich.print(model)
 
@@ -322,6 +321,8 @@ def run(args: Arguments) -> None:
         tokenizer=tokenizer,
         padding=args.padding,
         truncation=bool(args.truncation),
+        use_label_wise_attention=args.use_label_wise_attention,
+        num_classes=len(classes),
     )  # type: ignore
     train_dataloader, valid_dataloader, test_dataloader = fabric.setup_dataloaders(
         *(
@@ -342,9 +343,13 @@ def run(args: Arguments) -> None:
     )
 
     # Define the train/valid monitors
-    train_monitor = MeanMonitor(keys=["loss", "prompt_loss", "target_loss"])
+    if args.use_label_wise_attention:
+        keys = ["loss"]
+    else:
+        keys = ["loss", "prompt_loss", "target_loss"]
+    train_monitor = MeanMonitor(keys=keys)
     eval_monitor = helpers.TrieClassificationMonitor(
-        trie=classes, keys=["loss", "prompt_loss", "target_loss"], tokenizer=tokenizer
+        trie=classes, keys=keys, tokenizer=tokenizer
     )
 
     # Run the training loop
@@ -601,6 +606,8 @@ class _AlignCollateFn:
         truncation: bool = True,
         shuffle_targets: bool = False,
         seed: None | int = None,
+        use_label_wise_attention: bool = False,
+        num_classes: int = 50,
     ) -> None:
         self.prompt = _PromptWrapper(template)
         self.tokenize_fn = helpers.SafeTokenize(
@@ -610,6 +617,8 @@ class _AlignCollateFn:
             strict="warn",
         )
         self.seed = seed
+        self.label_wise_attention = use_label_wise_attention
+        self.num_classes = num_classes
         self._lookup = None
         self._rng = None
 
@@ -639,8 +648,19 @@ class _AlignCollateFn:
             prompt_texts.append(prompt)
             target_texts.append(target)
 
-        # Add EOS tokens
+        if self.label_wise_attention:
+            # Do not add EOS tokens, instead split the targets on commas and turn them into integers
+            all_target_ids = [torch.tensor([int(x) - 1 for x in target.split(",")]) for target in target_texts]
+            one_hot_targets = torch.zeros(len(all_target_ids), self.num_classes)
+            for i, target_ids in enumerate(all_target_ids):
+                one_hot_targets[i, target_ids] = 1
+            target_kvs = {f"target": one_hot_targets}
+        else:
+            # Add EOS tokens
+            target_kvs = {f"target_{k}": v for k, v in self.tokenize_fn(target_texts).items()}
+
         target_texts = [f"{target}{self.eos_token}" for target in target_texts]
+
 
         # Tokenize the texts & return
         return {
@@ -652,7 +672,7 @@ class _AlignCollateFn:
                 )
             ),
             **{f"prompt_{k}": v for k, v in self.tokenize_fn(prompt_texts).items()},
-            **{f"target_{k}": v for k, v in self.tokenize_fn(target_texts).items()},
+            **target_kvs,
         }
 
 

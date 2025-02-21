@@ -17,7 +17,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader
 from transformers.generation import stopping_criteria as generate_stops
 
-from model.utils import has_label_wise_attention
+from model.utils import _get_last_layer, has_label_wise_attention
 from tools.chrono import Chrono
 from tools.pbar import IterProgressBar
 
@@ -379,7 +379,7 @@ def evaluate(
 
         # Do something with the model output
         fabric.call(f"on_{task_type}_batch_end", batch=batch, output=output, step=step)  # TODO: Fix this
-        if fabric.is_global_zero and it <= 10:
+        if fabric.is_global_zero and it <= 10 and not has_label_wise_attention(model):
             tmp_samples = _get_samples_record(tokenizer, batch, output)
             for k, v in tmp_samples.items():
                 generated_samples[k].extend(v)
@@ -418,12 +418,12 @@ def _lm_forward(
     output = model(
         input_ids=input_ids,
         attention_mask=attention_mask,
-        labels=labels,
         use_cache=False,
     )
     if has_label_wise_attention(model):
+        labels = batch["target"]
         loss = _classification_loss(labels, output["logits"])
-        output = {**output, "loss": loss}
+        output = {**output, "loss": loss, "target_loss": loss}
     else:
         prompt_loss = _masked_lm_loss(labels, (labels_mask > 0) & (token_type_ids == 0), output["logits"])
         target_loss = _masked_lm_loss(labels, token_type_ids > 0, output["logits"])
@@ -444,16 +444,21 @@ def _lm_generate(
     stopping_criteria: None | generate_stops.StoppingCriteriaList = None,
     logits_processors: None | transformers.LogitsProcessorList = None,
 ) -> torch.Tensor:
-    generated_ids = model.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        generation_config=generation_config,
-        stopping_criteria=stopping_criteria,
-        max_new_tokens=max_new_tokens,
-        pad_token_id=pad_token_id,  # NOTE: https://stackoverflow.com/questions/69609401/suppress-huggingface-logging-warning-setting-pad-token-id-to-eos-token-id
-        logits_processor=logits_processors,
-    )
-    generated_ids = generated_ids[:, input_ids.shape[-1] :]
+    if has_label_wise_attention(model):
+        logits = model(input_ids=input_ids, attention_mask=attention_mask).logits
+        preds = torch.sigmoid(logits) >= 0.5
+        generated_ids = torch.nonzero(preds, as_tuple=False)
+    else:
+        generated_ids = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            generation_config=generation_config,
+            stopping_criteria=stopping_criteria,
+            max_new_tokens=max_new_tokens,
+            pad_token_id=pad_token_id,  # NOTE: https://stackoverflow.com/questions/69609401/suppress-huggingface-logging-warning-setting-pad-token-id-to-eos-token-id
+            logits_processor=logits_processors,
+        )
+        generated_ids = generated_ids[:, input_ids.shape[-1] :]
     return generated_ids
 
 
@@ -473,6 +478,7 @@ def _classification_loss(labels: torch.Tensor, logits: torch.Tensor) -> torch.Te
     The encoder loss must convert the labels to one-hot encoding and compute the cross-entropy loss.
     """
     return torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+
 
 
 def _iterate_micro_batches(
@@ -538,12 +544,17 @@ def _get_samples_record(
     tokenizer: transformers.PreTrainedTokenizerBase,
     batch: dict[str, torch.Tensor],
     output: dict[str, torch.Tensor],
+    label_wise_attention: bool = False,
 ) -> list[dict[str, typ.Any]]:
     """Get the samples record."""
     prompts = tokenizer.batch_decode(batch["prompt_input_ids"], skip_special_tokens=True)
-    targets = tokenizer.batch_decode(batch["target_input_ids"], skip_special_tokens=True)
-    predictions = tokenizer.batch_decode(output["preds_input_ids"], skip_special_tokens=True)
-    return {"prompt": prompts, "codes": batch["targets"], "targets": targets, "predictions": predictions}
+    if label_wise_attention:
+        predictions = output.logits.argsort(descending=True)
+        return {"prompt": prompts, "codes": batch["target"], "targets": batch["target"], "predictions": predictions}
+    else:
+        targets = tokenizer.batch_decode(batch["target_input_ids"], skip_special_tokens=True)
+        predictions = tokenizer.batch_decode(output["preds_input_ids"], skip_special_tokens=True)
+        return {"prompt": prompts, "codes": batch["targets"], "targets": targets, "predictions": predictions}
 
 
 def _get_occurences_table(predictions: list[int], targets: list[int]) -> wandb.Table:

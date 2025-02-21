@@ -16,7 +16,7 @@ class LabelCrossAttention(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        attention_mask: torch.Tensor,
+        attention_mask: torch.Tensor | None,
     ) -> torch.Tensor:
         """Label Cross Attention mechanism
 
