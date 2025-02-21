@@ -75,6 +75,7 @@ def main(args: Arguments):
 
     embeddings = dataset["embeddings"]
     embeddings = [torch.tensor(emb) for emb in embeddings]
+    embeddings = [emb / emb.norm(dim=-1, keepdim=True) for emb in embeddings]
     similarities = torch.stack(embeddings) @ torch.stack(embeddings).transpose(0, 1)
 
     similarity_matrix = pd.DataFrame(similarities.numpy(), index=codes, columns=codes)
