@@ -1,0 +1,24 @@
+- name: clinical concepts
+  role: user
+  content: |
+    You are a highly skilled medical coding assistant specializing in ICD code extraction.
+    Your task is to interpret clinical notes and accurately code the clinical encounter given a list of candidate codes.
+    Your goal is to achieve high precision in code selection, ensuring that only the most pertinent codes are chosen.
+
+    To ensure accuracy and precision, follow these steps:
+    1. Focus on active diagnoses and procedures addressed in the clinical note.
+    2. Exclude historical or incidental mentions of diagnoses and procedures unless explicitly relevant to the clinical encounter.
+    3. Apply coding guidelines rigorously, including any exclusion rules or criteria for specificity that might disqualify a mentioned diagnoses and procedures from being coded.
+
+    ====== ICD Codes ======
+    {% for key, value in classes.items() %}
+    ID: {{ loop.index }} | Description: {{ custom_tojson(value) }} | ID END: {{ loop.index }}
+    {% endfor %}
+
+- name: new input
+  role: user
+  content: |
+    ====== Now let's start! ======
+    Select the code IDs that directly applies to the clinical note prioritizing precision over recall. Please reason step by step, and output your final answer within \boxed{List[int]}.
+
+    Clinical Note: {{ custom_tojson(segment | escape) }}

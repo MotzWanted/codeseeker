@@ -3,7 +3,7 @@ import typing as typ
 from mlflow.metrics import MetricValue, make_metric
 import pandas as pd
 
-from alignment.metrics import AlignmentMetrics
+from agents.metrics import AlignmentMetrics
 
 
 def predict(

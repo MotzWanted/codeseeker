@@ -1,97 +1,79 @@
 import abc
-import hashlib
-import random
 import typing as typ
 
 import datasets
 import pydantic
 
 from dataloader.base import DatasetOptions
-from segmenters.base import Segmenter
 
 Im = typ.TypeVar("Im", bound=pydantic.BaseModel)
 Om = typ.TypeVar("Om", bound=pydantic.BaseModel)
 DictStrKey: typ.TypeAlias = dict[str, typ.Any]
 
 
-class BaseTrainingModel(pydantic.BaseModel):
+class CodeModel(pydantic.BaseModel):
+    """Model for an ICD code."""
+
+    name: str
+    description: str
+    chapter_id: str
+    etiology: bool
+    manifestation: bool
+    inclusion_term: list[str] = pydantic.Field(default=[], description="Inclusion terms.")
+    excludes1: list[str] = pydantic.Field(default=[], description="Excludes1 codes.")
+    excludes2: list[str] = pydantic.Field(default=[], description="Excludes2 codes.")
+    code_first: list[str] = pydantic.Field(default=[], description="Code first.")
+    code_also: list[str] = pydantic.Field(default=[], description="Code also.")
+    use_additional_code: list[str] = pydantic.Field(default=[], description="Use additional code.")
+
+
+class GuidelinesModel(pydantic.BaseModel):
+    """Model for guidelines."""
+
+    code: str
+    notes: list[str] = pydantic.Field(default=[], description="Notes on a code or category.")
+    includes: list[str] = pydantic.Field(default=[], description="Includes codes.")
+    excludes1: list[str] = pydantic.Field(default=[], description="Excludes1 codes.")
+    excludes2: list[str] = pydantic.Field(default=[], description="Excludes2 codes.")
+    use_additional_code: list[str] = pydantic.Field(default=[], description="Use additional code.")
+    code_first: list[str] = pydantic.Field(default=[], description="Code first.")
+    code_also: list[str] = pydantic.Field(default=[], description="Code also.")
+    inclusion_term: list[str] = pydantic.Field(default=[], description="Inclusion terms.")
+    assignable: bool = pydantic.Field(default=False, description="Is the code assignable?")
+
+
+class BaseModel(pydantic.BaseModel):
     """Fewshot model."""
 
     aid: str
-    segments: str
+    note: str
     targets: list[str]
-    classes: dict[str, str] = pydantic.Field(..., description="Look up table for classes.")
-
-    @pydantic.field_validator("targets", mode="after")
-    def order_target_indices(cls, v: list[int]) -> list[int]:
-        """Order the target indices from smallest to largest."""
-        if len(set(v)) < len(v):
-            raise ValueError(f"The target indices must be unique: {v}")
-        return sorted(v)
-
-    @pydantic.model_validator(mode="after")
-    def validate_codes_and_classes(self):
-        """Validate the codes and classes."""
-        for target in self.targets:
-            if target not in self.classes:
-                raise ValueError(f"The target {target} is not in the classes.")
-        return self
-
-    def parse_targets(self, shuffle: bool = False, seed: int = 42) -> str:
-        """Parse the targets."""
-        keys_list = list(self.classes.keys())
-        if shuffle:
-            random.shuffle(keys_list, seed=seed)
-        return f"{','.join(str(keys_list.index(i)+1) for i in self.targets)}"
-
-    def decode_targets(self, indexes: list[int]) -> list[str]:
-        """Decode the targets."""
-        return [self.classes[index] for index in indexes]
 
 
-class BaseInferenceModel(pydantic.BaseModel):
-    """Alignment model."""
+# class LegacyBaseModel(pydantic.BaseModel):
+#     """Fewshot model."""
 
-    aid: str = pydantic.Field(..., description="The alignment identifier.")
-    note_type: str | None = pydantic.Field(default=None, description="The note type.")
-    note_subtype: str | None = pydantic.Field(default=None, description="The note subtype.")
-    classes: list[str] = pydantic.Field(..., description="The classes to constrain the output space.")
-    segments: list[str] = pydantic.Field(..., description="The segments to align.")
-    targets: list[list[int]] = pydantic.Field(default=[[]], description="The target indices point to class indices.")
-    fewshots: list[BaseTrainingModel] | None = pydantic.Field(
-        default=None, description="Fewshots to include in prompt."
-    )
-    index2code: dict[str, str] = pydantic.Field(..., description="Look up table for classes.")
+#     aid: str
+#     note: str
+#     targets: list[str]
 
-    @pydantic.field_validator("segments", mode="before")
-    @classmethod
-    def validate_no_empty_strings(cls, v: list[str]) -> list[str]:
-        """Validate that the list of strings do not contain empty strings."""
-        if "" in v:
-            raise ValueError("The list of strings must not contain empty strings.")
-        return v
+#     @pydantic.field_validator("classes", mode="after")
+#     def order_classes(cls, v: list[CodeModel]) -> list[int]:
+#         """Order the target indices from smallest to largest."""
+#         return sorted(v, key=lambda x: x.name)
 
-    @pydantic.field_validator("targets", mode="before")
-    def validate_target_indices(cls, v: list[list[int]]) -> list[list[int]]:
-        """Validate the target indices and sort indices from smallest to largest."""
-        if 0 in v and len(v) > 1:
-            raise ValueError("The zero index must be the only index if it is present.")
-        return [sorted(inner_list) for inner_list in v]
+#     def parse_targets(self) -> list[str]:
+#         """Parse the targets."""
+#         target_idexes = [idx for idx, code in enumerate(self.classes, start=1) if code.name in self.targets]
+#         return target_idexes
 
-    @pydantic.model_validator(mode="after")
-    def validate_targets_and_shuffle_fewshots(self):
-        """Validate the labels."""
-        if self.targets:
-            max_value = max(max(inner_list) for inner_list in self.targets)
-            if max_value > len(self.classes):
-                raise ValueError("The maximum value in the labels must be less than the number of entities.")
-
-        if self.fewshots is None:
-            return self
-        seed = int(hashlib.sha256(self.aid.encode("utf-8")).hexdigest(), 16) % (2**32)
-        random.seed(seed)
-        random.shuffle(self.fewshots)
-        return self
+#     def decode_targets(self, indexes: list[int]) -> list[str]:
+#         """Decode the targets."""
+#         if isinstance(self.classes, str):
+#             self.classes = typ.cast(dict[str, str], ast.literal_eval(self.classes))
+#         if not isinstance(self.classes, dict):
+#             raise TypeError(f"Classes must be a dict, not {type(self.classes)}")
+#         return [self.classes[str(index)] for index in indexes]
 
 
 class AsDict:
@@ -114,10 +96,6 @@ class Adapter(typ.Generic[Im, Om], abc.ABC):
 
     input_model: type[Im]
     output_model: type[Om]
-
-    def __init__(self, segmenter: Segmenter) -> None:
-        self.segmenter = segmenter
-        super().__init__()
 
     @classmethod
     def can_handle(cls, row: dict[str, typ.Any]) -> bool:

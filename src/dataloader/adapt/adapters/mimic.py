@@ -1,17 +1,23 @@
-import hashlib
 import json
-import random
 import typing as typ
 
+import numpy as np
 import pydantic
 
-from dataloader.adapt.base import Adapter, BaseInferenceModel, BaseTrainingModel
-from dataloader.adapt.utils import shuffle_classes_randomly, sort_classes_alphabetically
+from dataloader.adapt.base import Adapter, BaseModel
+from dataloader.adapt.utils import (
+    shuffle_classes_randomly,
+    sort_classes_alphabetically,
+)
 from dataloader.base import DatasetOptions
 from dataloader.constants import PROJECT_ROOT
-from tools.code_trie import XMLTrie, get_hard_negatives_for_list_of_codes, get_random_negatives_for_codes
+from tools.code_trie import (
+    XMLTrie,
+    get_code_objects,
+)
 
 _MEDICAL_CODING_SYSTEMS_DIR = PROJECT_ROOT / "data/medical-coding-systems/icd"
+_NEGATIVES_DIR = PROJECT_ROOT / "data/medical-coding-systems/negatives"
 
 
 class MimicModel(pydantic.BaseModel):
@@ -22,197 +28,160 @@ class MimicModel(pydantic.BaseModel):
     note_id: str | None
     text: str
     codes: list[str]
-    classes: dict[str, str]
-
-    @pydantic.field_validator("classes", mode="before")
-    @classmethod
-    def validate_dict_string(cls, v: dict | str) -> dict[str, str]:
-        """Ensure that the classes are always a dictionary."""
-        if isinstance(v, dict):
-            return {str(key): value for key, value in v.items()}
-        _v: dict = json.loads(v)
-        return {str(key): value for key, value in _v.items()}
 
 
 class MimicAdapter(Adapter):
     """Adapter for the MedQA dataset."""
 
     input_model = MimicModel
-    output_model = BaseInferenceModel
+    output_model = BaseModel
+
+    _cm_trie: XMLTrie | None = None
+    _pcs_trie: XMLTrie | None = None
+    _negatives_data: dict[str, list] | None = None
+
+    @classmethod
+    def _ensure_loaded(cls) -> None:
+        """Load the XMLTrie and negatives JSON only if not already loaded."""
+        if cls._cm_trie is None:
+            cls._cm_trie = XMLTrie.from_xml_file(
+                str(_MEDICAL_CODING_SYSTEMS_DIR / "icd10cm_tabular_2025.xml"), "icd10cm"
+            )
+        if cls._pcs_trie is None:
+            cls._pcs_trie = XMLTrie.from_xml_file(
+                str(_MEDICAL_CODING_SYSTEMS_DIR / "icd10pcs_tables_2025.xml"),
+                "icd10pcs",
+            )
+        if cls._negatives_data is None:
+            with (_NEGATIVES_DIR / "icd10_negatives.json").open() as f:
+                cls._negatives_data = json.load(f)
 
     @property
-    def _cm_trie(self) -> XMLTrie:
-        return XMLTrie.from_xml_file(_MEDICAL_CODING_SYSTEMS_DIR / "icd10cm_tabular_2025.xml", "icd10cm")
+    def cm_trie(self) -> XMLTrie:
+        self._ensure_loaded()
+        return type(self)._cm_trie  # type: ignore
 
     @property
-    def _pcs_trie(self) -> XMLTrie:
-        return XMLTrie.from_xml_file(_MEDICAL_CODING_SYSTEMS_DIR / "icd10pcs_tables_2025.xml", "icd10pcs")
+    def pcs_trie(self) -> XMLTrie:
+        self._ensure_loaded()
+        return type(self)._pcs_trie  # type: ignore
+
+    @property
+    def negatives(self) -> dict[str, list]:
+        self._ensure_loaded()
+        return type(self)._negatives_data  # type: ignore
 
 
-def _split_into_pcs_and_cm(cm_trie: XMLTrie, pcs_trie: XMLTrie, codes: list[str]) -> tuple[list[str], list[str]]:
-    """Split the codes into PCS and CM codes."""
-    pcs_codes = [], cm_codes = []
-    for code in codes:
-        if code in cm_trie.lookup:
-            cm_codes.append(code)
-        elif code in pcs_trie.lookup:
-            pcs_codes.append(code)
-        elif code[:4] in pcs_trie.lookup:
-            pcs_codes.append(code)
-        elif code[:3] in cm_trie.lookup:
-            cm_codes.append(code)
-        else:
-            raise ValueError(f"Code {code} is not in the CM or PCS trie")
-    return pcs_codes, cm_codes
-
-
-def _sample_negatives_proportional_to_code_frequency(
-    pcs_codes: list[str], cm_codes: list[str], num: int, seed: int
+def sample_from_nested_list(
+    nested_list: list[list[str]],
+    positives: list[str],
+    negatives: int,
+    seed: int | str = 42,
 ) -> list[str]:
-    """Sample negatives proportional to the code frequency."""
-    weight_cm = len(cm_codes) / (len(cm_codes) + len(pcs_codes))
-    weight_pcs = len(pcs_codes) / (len(cm_codes) + len(pcs_codes))
-    negatives = random.choices(
-        cm_codes + pcs_codes, weights=[weight_cm] * len(cm_codes) + [weight_pcs] * len(pcs_codes), k=num, seed=seed
-    )
-    return negatives
+    # Ensure the total number of samples does not exceed 50
+    negatives_to_sample = min(negatives, negatives - len(positives))
+    if negatives_to_sample == 0:
+        return []
+    rng = np.random.RandomState(int(seed))
+    # Step 1: Determine the initial fair share per sublist
+    num_sublists = len(nested_list)
+    if num_sublists == 0:
+        raise ValueError("No negatives to sample from")
+    base_samples_per_sublist = negatives_to_sample // num_sublists
+    remainder = negatives_to_sample % num_sublists  # Leftover samples
 
+    selected_codes = []
+    remaining_negatives = negatives_to_sample
 
-def _sample_hard_negatives(
-    cm_trie: XMLTrie, pcs_trie: XMLTrie, pcs_codes: list[str], cm_codes: list[str], num: int, seed: int
-) -> list[str]:
-    """Sample hard negatives."""
-    cm_hard_negatives = get_hard_negatives_for_list_of_codes(cm_codes, cm_trie, num=num)
-    pcs_hard_negatives = get_hard_negatives_for_list_of_codes(pcs_codes, pcs_trie, num=num)
+    # Step 2: Assign samples as evenly as possible
+    for i, sublist in enumerate(sorted(nested_list)):
+        if remaining_negatives <= 0:
+            break
+        unique_sublist = [code for code in sublist if code not in positives and code not in selected_codes]
 
-    if len(cm_hard_negatives) + len(pcs_hard_negatives) < num:
-        raise ValueError(f"Number of hard negatives is less than {num}")
+        if len(unique_sublist) == 0:
+            continue
 
-    return _sample_negatives_proportional_to_code_frequency(pcs_hard_negatives, cm_hard_negatives, num, seed)
+        indices = np.arange(len(unique_sublist))
+        weights = np.exp(-0.5 * indices)  # Exponential decay
+        weights /= weights.sum()  # Normalize to get probabilities
 
+        num_to_sample = min(len(unique_sublist), base_samples_per_sublist + (1 if i < remainder else 0))
+        sampled = rng.choice(unique_sublist, size=num_to_sample, replace=False, p=weights).tolist()
 
-def _sample_random_negatives(
-    cm_trie: XMLTrie, pcs_trie: XMLTrie, pcs_codes: list[str], cm_codes: list[str], num: int, seed: int
-) -> list[str]:
-    """Sample soft negatives."""
-    cm_rand_negatives = get_random_negatives_for_codes(cm_codes, cm_trie, num=num)
-    pcs_rand_negatives = get_random_negatives_for_codes(pcs_codes, pcs_trie, num=num)
+        selected_codes.extend(sampled)
+        remaining_negatives -= len(sampled)
 
-    if len(cm_rand_negatives) + len(pcs_rand_negatives) < num:
-        raise ValueError(f"Number of soft negatives is less than {num}")
-
-    return _sample_negatives_proportional_to_code_frequency(cm_rand_negatives, pcs_rand_negatives, num, seed)
-
-
-def sample_negatives(
-    cm_trie: XMLTrie,
-    pcs_trie: XMLTrie,
-    classes: dict[str, str],
-    codes: list[list[str]],
-    num_negatives: int,
-    seed: int,
-    hard_ratio: float = 0.0,
-) -> dict[str, str]:
-    """Sample negative features."""
-    if num_negatives < 0:
-        # Return all features if negatives is less than zero
-        return classes
-    cm_codes, pcs_codes = _split_into_pcs_and_cm(cm_trie, pcs_trie, codes)
-
-    random_negatives: set[str] = set().union(
-        *_sample_random_negatives(cm_trie, pcs_trie, pcs_codes, cm_codes, int(num_negatives * (1 - hard_ratio)), seed)
-    )
-
-    positive_codes: set[str] = set().union(*codes)
-
-    num_hard_negatives = int(num_negatives * hard_ratio)
-    hard_negatives = _sample_hard_negatives(cm_trie, pcs_trie, pcs_codes, cm_codes, num_hard_negatives, seed)
-    negatives = hard_negatives + random_negatives
-    # Add selected negatives and postive codes to result
-    result = classes.copy()
-    for k in negatives + positive_codes:
-        result[k] = classes[k]
-
-    return result
+    return selected_codes[:negatives]
 
 
 def string_to_seed(string: str) -> int:
     # Hash the string using SHA-256 (or another hash algorithm)
-    hash_object = hashlib.sha256(string.encode())
-    # Convert the hash to an integer
-    hash_int = int(hash_object.hexdigest(), 16)
-    # Reduce the integer to a manageable size, if needed (e.g., for compatibility with random.seed)
-    return hash_int % (2**32)
-
-
-class MimicInferenceAdapter(Adapter):
-    """Adapter for the MedQA dataset."""
-
-    input_model = MimicModel
-    output_model = BaseInferenceModel
-
-    @classmethod
-    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseInferenceModel:
-        """Adapt a row."""
-
-        def _format_row(row: dict[str, typ.Any], options: DatasetOptions) -> dict[str, typ.Any]:
-            struct_row = cls.input_model(**row)
-            _id = f"{struct_row.subject_id}_{struct_row.hadm_id}_{struct_row.note_id}"
-            seed = string_to_seed(_id)
-            classes = sample_negatives(
-                cm_trie=cls._cm_trie,
-                pcs_trie=cls._pcs_trie,
-                classes=struct_row.classes,
-                codes=[struct_row.codes],
-                seed=seed,
-                hard_ratio=options.hard_negatives,
-                num_negatives=options.negatives,
-            )
-            order_fn = {"alphabetical": sort_classes_alphabetically, "random": shuffle_classes_randomly}[options.order]
-            ordered_classes = order_fn(classes, seed)
-            return {
-                "aid": _id,
-                "classes": ordered_classes,
-                "segments": [struct_row.text],
-                "targets": [struct_row.codes],
-            }
-
-        formatted_row = _format_row(row, options)
-        return cls.output_model(**formatted_row)
+    return abs(hash(string)) % (2**32)
 
 
 class MimicForTrainingAdapter(MimicAdapter):
     """Adapter for the MedQA dataset."""
 
     input_model = MimicModel
-    output_model = BaseTrainingModel
+    output_model = BaseModel
 
     @classmethod
-    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseTrainingModel:
+    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseModel:
         """Adapt a row."""
 
         def _format_row(row: dict[str, typ.Any], options: DatasetOptions) -> dict[str, typ.Any]:
+            cm_trie = cls().cm_trie
+            pcs_trie = cls().pcs_trie
+            negatives_data = cls().negatives
             struct_row = cls.input_model(**row)
             _id = f"{struct_row.subject_id}_{struct_row.hadm_id}_{struct_row.note_id}"
             seed = string_to_seed(_id)
-            code2class = sample_negatives(
-                cm_trie=cls._cm_trie,
-                pcs_trie=cls._pcs_trie,
-                classes=struct_row.classes,
-                codes=[struct_row.codes],
-                seed=seed,
-                hard_ratio=options.hard_negatives,
-                num_negatives=options.negatives,
+            positives = get_code_objects(
+                cm_trie,  # type: ignore
+                pcs_trie,  # type: ignore
+                struct_row.codes,
             )
-            order_fn = {"alphabetical": sort_classes_alphabetically, "random": shuffle_classes_randomly}[options.order]
-            ordered_classes = order_fn(code2class, seed)
+            negatives: list[list[list[str]]] = [negatives_data[code] for code in positives if code in negatives_data]
+            sampled_negatives = sample_from_nested_list(
+                negatives,
+                positives=positives,
+                negatives=options.negatives,
+                total=options.total,
+                seed=seed,
+            )
+            classes = {**positives, **sampled_negatives}
+            order_fn = {
+                "alphabetical": sort_classes_alphabetically,
+                "random": shuffle_classes_randomly,
+            }[options.order]
+            ordered_classes = order_fn(classes, seed)
+            if len(ordered_classes) < 50:
+                raise ValueError(f"Length of sorted classes is less than 50: {len(ordered_classes)}")
 
             return {
                 "aid": _id,
-                "classes": ordered_classes,
-                "segments": struct_row.text,
-                "targets": struct_row.codes,
+                "classes": json.dumps(ordered_classes),
+                "note": struct_row.text,
+                "targets": list(positives.keys()),
             }
 
         formatted_row = _format_row(row, options)
-        return cls.output_model(**formatted_row)
+        try:
+            output_model = cls.output_model(**formatted_row)
+        except pydantic.ValidationError as e:
+            print(f"Error in row: {row}")
+            raise e
+        return output_model
+
+
+class MimicIdentifyAdapter(MimicAdapter):
+    """Adapter for the MedQA dataset."""
+
+    input_model = MimicModel
+    output_model = MimicModel
+
+    @classmethod
+    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseModel:
+        """Adapt a row."""
+        return cls.output_model(**row)

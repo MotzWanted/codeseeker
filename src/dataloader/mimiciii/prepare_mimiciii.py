@@ -204,7 +204,7 @@ def main():
         pl.col("diagnosis_codes").map_elements(mimic_utils.reformat_icd9cm_code, return_dtype=pl.Utf8)
     )
     mimic_proc = mimic_proc.with_columns(
-        pl.col("procedure_codes").map_elements(mimic_utils.reformat_icd9cm_code, return_dtype=pl.Utf8)
+        pl.col("procedure_codes").map_elements(mimic_utils.reformat_icd9pcs_code, return_dtype=pl.Utf8)
     )
 
     # Process codes and notes
@@ -232,6 +232,9 @@ def main():
 
     # remove rare codes
     mimiciii_clean = mimic_utils.remove_rare_codes(mimiciii, ["codes"], 10)
+    # mimiciii_50 = mimic_utils.keep_top_k_codes(mimiciii_clean, ["codes"], 50).filter(
+    #     pl.col("codes").map_elements(len) > 0
+    # )
     mimiciii_50 = mimiciii.with_columns(
         pl.col("codes")
         .map_elements(lambda x: [code for code in x if code in TOP_50_MULLENBACH_CODES], return_dtype=pl.List(pl.Utf8))

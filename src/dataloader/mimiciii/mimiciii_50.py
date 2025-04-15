@@ -12,7 +12,6 @@ from dataloader.constants import PROJECT_ROOT
 
 logger = datasets.logging.get_logger(__name__)
 
-
 _CITATION = """
 @inproceedings{mullenbach-etal-2018-explainable,
     title = "Explainable Prediction of Medical Codes from Clinical Text",
@@ -91,6 +90,8 @@ class MIMIC_III_50(datasets.GeneratorBasedBuilder):
             for codes, descriptions in zip(mimiciii_50["codes"], mimiciii_50["codes_descriptions"])
             for code, desc in zip(codes, descriptions)
         }
+        if len(classes) < 50:
+            raise ValueError(f"Only {len(classes)} classes available. Need at least 50 classes.")
         mimiciii_50 = mimiciii_50.with_columns([pl.lit(json.dumps(classes)).alias("classes")])
         splits = pl.read_ipc(_SPLITS_PATH)
         splits = splits.rename(

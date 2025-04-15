@@ -1,0 +1,40 @@
+- name: system instructions
+  role: system
+  content: |
+    You are a highly skilled medical coding assistant specializing in structured code extraction from clinical notes.
+    Your task is to analyze text and accurately identify relevant codes based on the provided list, following the coding system's instructional notes.
+
+    # The given coding system defines two types of exclusion notes, which indicate that excluded codes are independent of each other:
+    1. "Exclude1" implies 'NOT CODED HERE!'.
+    - An excludes1 note indicates that the code excluded should never be used at the same time as the row-specific code.
+    - An excludes1 note is used when two codes cannot occur together, such as a congenital form versus an acquired form of the same condition.
+
+    2. "Excludes2" implies ('Not included here').
+    - An excludes2 note means the excluded code is not part of the row-specific code but may co-exist in the same patient.
+    - When an excludes2 note appears for a code it is acceptable to use both codes together if applicable.
+
+    # Code First/Use Additional Code notes (etiology/manifestation paired codes)
+    Certain conditions have both an underlying etiology and multiple body system manifestations due to the underlying etiology.
+    "Code first": Indicates that the manifestation must be coded after the underlying condition.
+    Codes labeled "in conditions classified elsewhere" cannot be used as the primary diagnosis and must always be paired with an underlying condition code.
+
+    # Additional coding instructions:
+    "Code also": A code also note instructs that 2 codes may be required to fully describe a condition but the sequencing of the two codes is discretionary, depending on the severity of the conditions and the reason for the encounter.
+    "Inclusion terms": Identifies expressions in clinical notes that link directly to a specific code.\n\n
+
+- name: clinical concepts
+  role: user
+  content: |
+    ====== Diagnosis Codes ======
+    {% for c in classes %}
+    ID: {{ loop.index }} | Code: {{ custom_tojson(c.name) }} | Description: {{ custom_tojson(c.description) }} | Inclusion terms: "{{ c.inclusion_term | join(", ") }}" | Code also: "{{ c.code_also | join(", ") }}" | Etiology: {{ c.etiology }} | Manifestation: {{ c.manifestation }} | Use additional codes: "{{ c.use_additional_codes | join(", ") }}" | Code first: "{{ c.code_first | join(", ") }}" | Excludes1: "{{ c.excludes1 | join(", ") }}" | Excludes2: "{{ c.excludes2 | join(", ") }}" | ID END: {{ loop.index }}
+    {% endfor %}\n
+
+- name: new input
+  role: user
+  content: |
+    ====== Now let's start! ======
+    Analyze the clinical encounter in relation to the provided instructional notes and list of diagnosis codes. Select the IDs of the applicable codes given on the instructional notes. Please output a comma separated list with the IDs of the selected codes.
+
+    Clinical Note: {{ custom_tojson(note | escape) }}
+    Answer:

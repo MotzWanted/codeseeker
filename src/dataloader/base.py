@@ -7,7 +7,6 @@ import pydantic
 from datasets import fingerprint
 from pydantic_settings import SettingsConfigDict
 
-from segmenters.base import Segmenter
 
 CACHE_DIR = str(pathlib.Path(os.environ.get("CACHE_DIR", "~/.cache/docgen")).expanduser())
 DATASETS_CACHE_PATH = str(pathlib.Path(CACHE_DIR, "datasets"))
@@ -35,29 +34,17 @@ class DatasetOptions(pydantic.BaseModel):
         default=None,
         description="Take a subset of the dataset.",
     )
-    segmenter: Segmenter = pydantic.Field(
-        ...,
-        description="Configures a sectioning algorithm to split input documents/sections into smaller chunks.",
-    )
     negatives: int = pydantic.Field(
-        default=-1,
+        default=0,
         description="Number of negative examples to sample.",
     )
     hard_negatives: float = pydantic.Field(
         default=0.0,
         description="Fraction of hard negatives to sample.",
     )
-    shots: int = pydantic.Field(
-        default=0,
-        description="Number of shots for few-shot learning.",
-    )
     seed: int = pydantic.Field(
         default=0,
         description="Seed for reproducibility.",
-    )
-    order: typ.Literal["alphabetical", "random"] = pydantic.Field(
-        default="random",
-        description="Order of classes.",
     )
     adapter: None | str = pydantic.Field(default=None, description="Adapter for the dataset.")
     model_config = SettingsConfigDict(arbitrary_types_allowed=True, extra="forbid")

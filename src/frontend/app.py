@@ -4,8 +4,8 @@ import typing as typ
 from flask import Flask, render_template, request
 
 from prompt_poet import Prompt
-from alignment.aligners.llm import StructuredLLMAligner
-from alignment.metrics import AlignmentMetrics
+from agents.aligners.llm import StructuredLLMAligner
+from agents.metrics import AlignmentMetrics
 from throughster.factory import create_interface, ModelInterface
 
 from frontend import config
