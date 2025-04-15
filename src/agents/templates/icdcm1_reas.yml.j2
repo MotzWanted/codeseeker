@@ -1,0 +1,21 @@
+- name: system instructions
+  role: system
+  content: |
+    You are a highly skilled medical coding assistant specializing in structured code extraction from clinical notes.
+    Your task is to analyze text and accurately identify relevant codes based on the provided list.\n
+
+- name: clinical concepts
+  role: user
+  content: |
+    ====== Diagnosis Codes ======
+    {% for c in classes %}
+    ID: {{ loop.index }} | Code: {{ custom_tojson(c.name) }} | ID END: {{ loop.index }}
+    {% endfor %}
+
+- name: new input
+  role: user
+  content: |
+    ====== Now let's start! ======
+    Analyze the clinical encounter against the provided list of diagnosis codes and select the IDs of applicable codes. Please reason step by step, and output your final answer as a comma separated list with the IDs of the selected codes within <answer>...</answer>.
+
+    Clinical Note: {{ custom_tojson(note | escape) }}

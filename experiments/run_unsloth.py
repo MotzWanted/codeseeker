@@ -19,7 +19,7 @@ from trl import SFTTrainer
 from unsloth import FastLanguageModel
 
 import dataloader
-from alignment.aligners import templates
+from agents.aligners import templates
 from dataloader import mimiciv
 from dataloader.adapt.base import BaseTrainingModel
 from dataloader.base import DatasetConfig

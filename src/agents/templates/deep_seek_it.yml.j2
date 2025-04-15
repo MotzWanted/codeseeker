@@ -1,0 +1,29 @@
+- name: clinical concepts
+  role: system
+  content: |
+    <|begin_of_text|><|start_header_id|>system<|end_header_id|>
+    You are a highly skilled medical coding assistant specialized in ICD codes.
+    Your task is to analyze clinical notes and accurately code the clinical encounter given a list of candidate codes.
+
+    Follow these steps:
+    1. Identify active diagnoses and procedures that are addressed in the clinical note.
+    2. Exclude historical or incidental mentions of diagnoses and procedures unless they are explicitly relevant to the clinical encounter.
+    3. Strictly adhere to ICD coding guidelines, ensuring that only conditions actively managed during the encounter are coded. Exclude diagnoses and procedures that are historical, incidental, or fail to meet coding specificity requirements.
+
+    ====== ICD Codes ======
+    {% for key, value in classes.items() %}
+    ID: {{ loop.index }} | Description: {{ custom_tojson(value) }} | ID END: {{ loop.index }}
+    {% endfor %}
+    <|eot_id|>\n
+
+- name: new input
+  role: user
+  content: |
+    <|start_header_id|>user<|end_header_id|>
+    Using the provided list of codes, analyze the clinical note and determine which apply.
+    For each applicable code, provide reasoning inside a separate `<think> ... </think>` tag, referencing the note to explain why the code is relevant.
+    Then, return the corresponding ID inside an `<answer> ... </answer>` tag as a single integer.
+    Clinical Note: {{ custom_tojson(note | escape) }}
+    <|eot_id|>
+    <|start_header_id|>assistant<|end_header_id|>\nLet me solve this step by step.
+    <think>

@@ -1,19 +1,25 @@
-import json
 import typing as typ
 import pydantic
 
 
-from dataloader.adapt.base import Adapter, BaseInferenceModel
-from dataloader.adapt.utils import create_labels, flatten_fewshots
+from dataloader.adapt.adapters.mimic import MimicAdapter, sample_from_nested_list
+from dataloader.adapt.base import BaseModel
 from dataloader.base import DatasetOptions
-from segmenters import Segment
+from dataloader.constants import PROJECT_ROOT
+from tools.code_trie import get_code_guidelines, get_code_objects
+
+_MEDICAL_CODING_SYSTEMS_DIR = PROJECT_ROOT / "data/medical-coding-systems/icd"
+_NEGATIVES_DIR = PROJECT_ROOT / "data/medical-coding-systems/negatives"
+
+"""
+ICD system: https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2022/
+"""
 
 
 class MdaceAnnotationModel(pydantic.BaseModel):
     """Model for a clinical patient note annotation."""
 
     code: list[str]
-    code_description: list[str]
     code_type: list[str]
     spans: list[list[list[int]]]
 
@@ -31,55 +37,75 @@ class MdaceDataModel(pydantic.BaseModel):
     note_type: str
     note_subtype: str
     text: str
-    classes: dict[str, str]
     annotations: MdaceAnnotationModel
 
-    @pydantic.field_validator("classes", mode="before")
-    @classmethod
-    def validate_dict_string(cls, v: dict | str) -> dict[str, str]:
-        """Ensure that the classes are always a dictionary."""
-        if isinstance(v, dict):
-            return {str(key): value for key, value in v.items()}
-        _v: dict = json.loads(v)
-        return {str(key): value for key, value in _v.items()}
 
-
-class MdaceAdapter(Adapter):
+class MdaceAdapter(MimicAdapter):
     """Adapter for the MedQA dataset."""
 
     input_model: typ.Type[MdaceDataModel] = MdaceDataModel
-    output_model: typ.Type[BaseInferenceModel] = BaseInferenceModel
+    output_model: typ.Type[BaseModel] = BaseModel
 
     @classmethod
-    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseInferenceModel:
+    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseModel:
         """Adapt a row."""
 
         def _format_row(row: dict[str, typ.Any], options: DatasetOptions) -> dict[str, typ.Any]:
             struct_row = cls.input_model(**row)
-            segments: list[Segment] = list(options.segmenter(struct_row.text))
-            text_segments: list[str] = [chunk.text for chunk in segments]
-            code2class, classes, targets = create_labels(
-                segments=segments,
-                targets=struct_row.annotations.code,
-                spans=struct_row.annotations.location,
-                classes=struct_row.classes,
-                negatives=options.negatives,
-                seed=options.seed,
-            )
+            targets = []
+            for code in struct_row.annotations.code:
+                if code not in targets:
+                    targets.append(code)
             return {
                 "aid": f"{struct_row.hadm_id}_{struct_row.note_id}",
-                "note_type": struct_row.note_type,
-                "note_subtype": struct_row.note_subtype,
-                "classes": classes,
-                "segments": text_segments,
+                "note": struct_row.text,
                 "targets": targets,
-                "index2code": {str(idx): code for idx, code in enumerate(code2class, start=1)},
             }
 
         formatted_row = _format_row(row, options)
-        fewshots = None
-        if "fewshots" in row and row["fewshots"]:
-            formatted_fewshots = [_format_row(row, options) for row in row["fewshots"]]
-            fewshots = flatten_fewshots(formatted_fewshots, options.seed)
+        return cls.output_model(**formatted_row)
 
-        return cls.output_model(**formatted_row, fewshots=fewshots)
+
+class MdaceLegacyAdapter(MdaceAdapter):
+    """Adapter for the MedQA dataset."""
+
+    input_model: typ.Type[MdaceDataModel] = MdaceDataModel
+    output_model: typ.Type[BaseModel] = BaseModel
+
+    @classmethod
+    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseModel:
+        """Adapt a row."""
+
+        def _format_row(row: dict[str, typ.Any], options: DatasetOptions) -> dict[str, typ.Any]:
+            cm_trie = cls().cm_trie
+            pcs_trie = cls().pcs_trie
+            negatives_data = cls().negatives
+            struct_row = cls.input_model(**row)
+            positives = list(set(code for code in struct_row.annotations.code))
+            negatives: list[list[str]] = [negatives_data[code] for code in positives if code in negatives_data]
+            sampled_negatives = sample_from_nested_list(
+                negatives,
+                positives=positives,
+                negatives=options.negatives,
+                seed=options.seed,
+            )
+            classes = get_code_objects(
+                cm_trie,
+                pcs_trie,
+                positives + sampled_negatives,
+            )
+            guidelines = get_code_guidelines(
+                cm_trie,
+                pcs_trie,
+                [code.name for code in classes],
+            )
+            return {
+                "aid": f"{struct_row.hadm_id}_{struct_row.note_id}",
+                "guidelines": guidelines,
+                "classes": [code.model_dump() for code in classes],
+                "note": struct_row.text,
+                "targets": positives,
+            }
+
+        formatted_row = _format_row(row, options)
+        return cls.output_model(**formatted_row)

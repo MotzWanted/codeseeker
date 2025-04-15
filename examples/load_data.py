@@ -35,69 +35,25 @@ DATASET_CONFIGS = {
         "identifier": "meddec",
         "name_or_path": meddec,
         "split": "train",
-        "options": {"segmenter": SEGMENTER},
     },
     "snomed": {
         "identifier": "snomed",
         "name_or_path": snomed,
         "split": "train",
-        "options": {"segmenter": SEGMENTER},
     },
-    "mdace-diagnosis-3": {
-        "identifier": "mdace-diagnosis-3",
+    "mdace-icd10cm": {
+        "identifier": "mdace-icd10cm",
         "name_or_path": mdace_inpatient,
-        "subsets": ["icd10cm-3"],
+        "subsets": ["icd10cm"],
         "split": "test",
-        "options": {"segmenter": SEGMENTER},
-    },
-    "mdace-procedure-4": {
-        "identifier": "mdace-procedure-4",
-        "name_or_path": mdace_inpatient,
-        "subsets": ["icd10pcs-4"],
-        "split": "test",
-        "options": {"segmenter": SEGMENTER},
-    },
-    "mdace-icd10cm-3.0": {
-        "identifier": "mdace-icd10cm-3.0",
-        "name_or_path": mdace_inpatient,
-        "subsets": ["icd10cm-3.0"],
-        "split": "test",
-        "options": {"segmenter": SEGMENTER},
-    },
-    "mdace-icd10cm-3.1": {
-        "identifier": "mdace-icd10cm-3.1",
-        "name_or_path": mdace_inpatient,
-        "subsets": ["icd10cm-3.1"],
-        "split": "test",
-        "options": {"segmenter": SEGMENTER},
-    },
-    "mdace-icd10cm-3.2": {
-        "identifier": "mdace-icd10cm-3.2",
-        "name_or_path": mdace_inpatient,
-        "subsets": ["icd10cm-3.2"],
-        "split": "test",
-        "options": {"segmenter": SEGMENTER},
-    },
-    "mdace-icd10cm-3.3": {
-        "identifier": "mdace-icd10cm-3.3",
-        "name_or_path": mdace_inpatient,
-        "subsets": ["icd10cm-3.3"],
-        "split": "test",
-        "options": {"segmenter": SEGMENTER},
-    },
-    "mdace-icd10cm-3.4": {
-        "identifier": "mdace-icd10cm-3.4",
-        "name_or_path": mdace_inpatient,
-        "subsets": ["icd10cm-3.4"],
-        "split": "test",
-        "options": {"segmenter": SEGMENTER},
+        "options": {"adapter": "MdaceAdapter", "negatives": 50},
     },
     "mimic-iv": {
         "identifier": "mimic-iv",
         "name_or_path": mimiciv,
         "split": "test",
         "subsets": ["icd10-3.4"],
-        "options": {"segmenter": SEGMENTER, "negatives": 100, "hard_negatives": 1.0},
+        "options": {"negatives": 100, "hard_negatives": 1.0},
     },
     "my_data": {
         "identifier": "my_data",
@@ -107,13 +63,13 @@ DATASET_CONFIGS = {
     "mimic-iii-50": {
         "identifier": "mimic-iii-50",
         "name_or_path": mimiciii_50,
-        "options": {"segmenter": SEGMENTER, "adapter": "MimicForTrainingAdapter"},
+        "options": {"adapter": "MimicForTrainingAdapter"},
     },
     "mimic-iv-50": {
         "identifier": "mimic-iv-50",
         "name_or_path": mimiciv_50,
         "subsets": ["icd10"],
-        "options": {"segmenter": SEGMENTER, "adapter": "MimicForTrainingAdapter"},
+        "options": {"adapter": "MimicForTrainingAdapter"},
     },
 }
 
@@ -121,7 +77,7 @@ DATASET_CONFIGS = {
 class Arguments(BaseSettings):
     """Arguments for the script."""
 
-    name: str = "mimic-iv-50"
+    name: str = "mdace-icd10cm"
 
     model_config = SettingsConfigDict(cli_parse_args=True, frozen=True)
 
@@ -132,7 +88,7 @@ def run(args: Arguments) -> None:
         config = DatasetConfig(**DATASET_CONFIGS[args.name])
     except KeyError as exc:
         raise KeyError(f"Configuration for `{args.name}` not found!") from exc
-    config.options.prep_map_kws = {"num_proc": 16, "load_from_cache_file": False}
+    config.options.prep_map_kws = {"num_proc": 1, "load_from_cache_file": False}
     dset = dataloader.load_dataset(config)
     rich.print(dset)
 

@@ -1,0 +1,32 @@
+- name: system instructions
+  role: system
+  content: |
+    You are a highly skilled medical coding assistant specializing in structured code extraction from clinical notes.
+    Your task is to analyze text for medical terminology to determine lead terms and modifiers and locate the lead terms in the Alphabetical Index of the diagnostic statements in the clinical note.
+
+    Cross references are provided in the Alphabetical Index to ensure that all possible terms or its synonyms are referenced. Cross references explicitly direct you to other entries in the index:
+    "See" is an explicit direction to look elsewhere as no codes can be found alongside this cross reference. It is used to direct you to another lead term in the Alphabetical Index where complete information can be found. It is also used after anatomical sites to remind the coder that the Alphabetical Index is organised by condition.
+    "See also" is a reminder to look under another lead term if the term you is looking for cannot be found modified in any way under the first lead term.
+
+    Examples:
+    - "Hematothorax (See Hemothorax)" directs the coder to the lead term "Hemothorax".
+    - "Femur, femoral (See condition)" reminds the coder to look for the condition affecting the femur - e.g. "femoral fracture" would be found under the lead term "Fracture".
+    - "Abrasion (See also Injury, superficial)" means if any additional modifier is documented in the note that is not indented under the lead term "Abrasion" (e.g. conjunctiva) the lead term "Injury" (with modifier "superficial") should be used.
+    - "Enlargement, enlarged (See also Hypertrophy)" means if the site of the enlargement is not listed in the modifiers under the lead term "Enlargement", then the coder should look up "Hypertrophy".
+    - "Abdomen, abdominal (See also condition)" means if the condition reported in the clinical note is not listed, then the coder must look up the condition instead.
+- name: clinical concepts
+  role: user
+  content: |
+    ====== Alphabetical Index ======
+    {% for t in terms %}{% if t.see %}{% set append = (See 't.see') %}{% elif t.see_also %}{% set append = (See 't.see_also') %}{% else %}{% set append = '' %}{% endif %}
+    ID: {{ loop.index }} | Term: "{{ t.title }}{% if append %} {{ append }}{% endif %}" | ID END: {{ loop.index }}
+    {% endfor %}
+
+- name: new input
+  role: user
+  content: |
+    ====== Now let's start! ======
+    Analyze the clinical note against the alphabetic index and select the IDs of applicable lead terms. Please reason step by step, and output your final answer as a comma separated list with the IDs of the selected terms within <answer>...</answer>.
+
+    Clinical Note: {{ custom_tojson(note | escape) }}
+    Answer:

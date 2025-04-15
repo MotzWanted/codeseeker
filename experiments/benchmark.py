@@ -10,12 +10,13 @@ import rich
 from loguru import logger
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from throughster.factory import create_interface
+import torch
 
 import dataloader
-from alignment.aligners.llm import create_llm_aligner
-from alignment.ops import HfAlignment
+from agents.aligners.llm import create_llm_aligner
+from agents.ops import HfAlignment
 from dataloader.base import DatasetConfig
-from finetune.helpers import ClassificationMonitor
+from finetune.helpers import TrieClassificationMonitor
 
 # MLFOW_TRACKING_URI = "http://172.16.40.132:5101"
 
@@ -27,28 +28,27 @@ dump_folder = pathlib.Path("~/research/entityseeker/benchmark-data").expanduser(
 class Arguments(BaseSettings):
     """Args for the script."""
 
-    experiment_id: str = "mimiciv-icd10cm"
-    experiment_name: str = "constrained-decoding-lora"
+    experiment_id: str = "mdace-icd10cm"
+    experiment_name: str = "instructional-notes"
 
     provider: str = "vllm"  # "azure" | "vllm" | "mistral"
-    api_base: str = "http://localhost:6539/v1"
-    deployment: str = "5K-lora"
+    api_base: str = "http://localhost:6538/v1"
+    deployment: str = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
     endpoint: typ.Literal["chat/completions", "completions"] = "completions"
 
-    prompt_name: str = "icdcm_v2"  # lookup in `src/alignment/templates`
+    prompt_name: str = "icdcm1_struct:icdcm2_struct:icdcm3_struct:icdcm4_struct"  # lookup in `src/alignment/templates`
 
     aligner_type: str = "regex"  # "structured" | "regex" | "unconstrained"
     temperature: float = 0.0
     token_limit: int = 128000
 
-    dataset: str = "mimiciv-cm-3.0:mimiciv-cm-3.1:mimiciv-cm-3.2:mimiciv-cm-3.3:mimiciv-cm-3.4"
-    fewshots: str = "0"  # e.g., "1:5:10:20:50"
-    negatives: str = "-1"  # number of negative samples to include in the prompt
-    seed: str = "1:2:3"  # e.g., "1:2:3:4:5"
+    dataset: str = "mdace-icd10cm"  # "mimic-iii-50" | "mimic-iv" | "mdace-icd10cm"
+    negatives: str = "0:20:40:60:80:100"  # number of negative samples to include in the prompt
+    seed: str = "1"  # e.g., "1:2:3:4:5"
     n_samples: int = 1
 
-    num_workers: int = 8
-    batch_size: int = 1
+    num_workers: int = 4
+    batch_size: int = 2
 
     response_wait_time: int = 0  # seconds; useful to prevent RateLimitErrors
     use_cache: bool = True  # whether to cache on request level
@@ -71,17 +71,12 @@ class Arguments(BaseSettings):
     @pydantic.computed_field
     def experiment_folder(self) -> str:
         """Get the experiment name."""
-        return f"{self._deployment_name}/{self.experiment_name}/{self._hash}"
+        return f"{self.experiment_name}/{self._deployment_name}"
 
     @pydantic.computed_field
     def _negatives(self) -> list[int]:
         """Get the negatives."""
         return [int(x) for x in self.negatives.split(":")] if ":" in self.negatives else [int(self.negatives)]
-
-    @pydantic.computed_field
-    def _num_shots(self) -> list[int]:
-        """Get the num_shots."""
-        return [int(x) for x in self.fewshots.split(":")] if ":" in self.fewshots else [int(self.fewshots)]
 
     @pydantic.computed_field
     def _seeds(self) -> list[int]:
@@ -92,6 +87,11 @@ class Arguments(BaseSettings):
     def _datasets(self) -> list[str]:
         """Get the datasets."""
         return [x for x in self.dataset.split(":")] if ":" in self.dataset else [self.dataset]
+
+    @pydantic.computed_field
+    def _prompts(self) -> list[str]:
+        """Get the prompts."""
+        return [x for x in self.prompt_name.split(":")] if ":" in self.prompt_name else [self.prompt_name]
 
 
 def _get_dataset(dset: datasets.Dataset | datasets.DatasetDict) -> datasets.Dataset:
@@ -109,15 +109,15 @@ def run(args: Arguments):
         dset_config: DatasetConfig = DatasetConfig(**dataloader.DATASET_CONFIGS[dataset])
         dset_config.options.prep_map_kws = {"load_from_cache_file": False, "num_proc": args.num_workers}
         logger.info(f"Running {dataset} with seeds `{args._seeds}`.")
-        for num_shots in args._num_shots:
-            dset_config.options.shots = num_shots
+        for prompt_name in args._prompts:
             for num_negs in args._negatives:
                 dset_config.options.negatives = num_negs
                 for seed in args._seeds:
                     dset_config.options.seed = seed
-                    dset: datasets.Dataset = dataloader.load_dataset(dset_config)
-                    classes = dset[0]["classes"]
-                    logger.info(f"Predicting with {len(classes)} codes...")
+                    dset = dataloader.load_dataset(dset_config)
+                    if isinstance(dset, datasets.DatasetDict):
+                        dset = datasets.concatenate_datasets(dset.values())
+                    logger.info(f"Predicting with {num_negs} negatives...")
                     init_client = partial(
                         create_interface,
                         provider=args.provider,
@@ -129,8 +129,7 @@ def run(args: Arguments):
                     )
                     aligner = create_llm_aligner(
                         aligner_type=args.aligner_type,
-                        prompt_name=args.prompt_name,
-                        num_shots=num_shots,
+                        prompt_name=prompt_name,
                         token_limit=args.token_limit,
                         seed=seed,
                         sampling_params={
@@ -148,21 +147,36 @@ def run(args: Arguments):
                         num_proc=args.num_workers,
                         batched=True,
                         batch_size=args.batch_size,
-                        desc=f"Predicting {num_shots} shots with seed `{seed}` for {len(classes)} classes.",
+                        desc=f"Predicting with seed `{seed}` for {num_negs} negatives.",
                         remove_columns=_get_dataset(dset).column_names,
                         load_from_cache_file=False,
                     )
-                    monitor = ClassificationMonitor(classes=len(classes))
-                    monitor.update(target_input_ids=eval_data["targets"], preds_input_ids=eval_data["indexes"])
-                    metrics = {k: v.item() for k, v in monitor.get().items()}
+
+                    unique_codes = set()
+                    for row in eval_data:
+                        unique_codes.update([code["name"] for code in row["classes"]])
+                    trie = {code: idx for idx, code in enumerate(sorted(unique_codes))}
+
+                    monitor = TrieClassificationMonitor(trie=trie)
+                    monitor.update(
+                        target_input_ids=eval_data["targets"],
+                        preds_input_ids=eval_data["indexes"],
+                        list_of_classes=eval_data["classes"],
+                    )
+                    metrics = {k: v.item() for k, v in monitor.get().items() if isinstance(v, torch.Tensor)}
                     rich.print(f"[yellow]{metrics}[/yellow]")
-                    save_folder = dump_folder / str(args.experiment_folder) / f"{dataset}" / f"seed{str(seed)}"
+                    save_folder = (
+                        dump_folder
+                        / str(args.experiment_folder)
+                        / dataset
+                        / f"{prompt_name}_neg{str(num_negs)}_seed{str(seed)}"
+                    )
 
                     logger.info(f"Dumping results to {save_folder}")
                     save_folder.mkdir(parents=True, exist_ok=True)
                     with open(save_folder / "responses.json", "w") as f:
                         cols_to_remove = set(_get_dataset(eval_data).column_names) - set(
-                            ["aid", "classes", "indexes", "targets", "index2code", "note_type"]
+                            ["aid", "classes", "indexes", "targets", "response"]
                         )
                         dump_data = eval_data.remove_columns(list(cols_to_remove))
                         json.dump(dump_data.to_list(), f)

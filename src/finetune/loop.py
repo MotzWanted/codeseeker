@@ -143,7 +143,7 @@ def training(
     fabric.call("on_fit_start", step=step, model=model)
     epoch_length = len(train_dataloader)
     samples_table = (
-        wandb.Table(columns=["Run", "Step", "prompt", "Targets", "Predictions"]) if fabric.is_global_zero else None
+        wandb.Table(columns=["run", "step", "prompt", "targets", "predictions"]) if fabric.is_global_zero else None
     )
     per_class_table = (
         wandb.Table(columns=["idx", "code", "desc", "freq", "tp", "fp", "fn", "f1_macro"])
@@ -245,14 +245,14 @@ def training(
                                 "eval/per-class-metrics",
                                 per_class_table,
                             )
-                            multi_line_chart = wandb.plot.line_series(
-                                xs=per_class_table.get_column("Step"),
-                                ys=per_class_table.get_column("f1_macro"),
-                                keys=per_class_table.get_column("Code"),
-                                title="Per Class F1-Macro",
-                                xname="Step",
-                            )
-                            fabric.log("eval/f1_macro_multi", multi_line_chart)
+                            # multi_line_chart = wandb.plot.line_series(
+                            #     xs=per_class_table.get_column("Step"),
+                            #     ys=per_class_table.get_column("f1_macro"),
+                            #     keys=per_class_table.get_column("Code"),
+                            #     title="Per Class F1-Macro",
+                            #     xname="Step",
+                            # )
+                            # fabric.log("eval/f1_macro_multi", multi_line_chart)
                             fabric.log_dict({f"eval/{k}": v for k, v in eval_metrics_.items()}, step=step)
                         eval_metrics.update(eval_metrics_)
                         fabric.call("on_validation_end", step=step, model=model, metrics=eval_metrics)
@@ -532,7 +532,7 @@ def _get_samples_record(
     prompts = tokenizer.batch_decode(batch["prompt_input_ids"], skip_special_tokens=True)
     targets = tokenizer.batch_decode(batch["target_input_ids"], skip_special_tokens=True)
     predictions = tokenizer.batch_decode(output["preds_input_ids"], skip_special_tokens=True)
-    return {"prompt": prompts, "codes": batch["targets"], "targets": targets, "predictions": predictions}
+    return {"prompt": prompts, "targets": targets, "predictions": predictions}
 
 
 def _get_occurences_table(predictions: list[int], targets: list[int]) -> wandb.Table:

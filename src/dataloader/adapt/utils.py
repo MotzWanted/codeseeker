@@ -7,7 +7,7 @@ import datasets
 from intervaltree import Interval, IntervalTree
 from rich.table import Table
 
-from dataloader.adapt.base import BaseInferenceModel, BaseTrainingModel
+from dataloader.adapt.base import BaseModel
 from segmenters.models import Segment
 
 
@@ -147,13 +147,13 @@ def sample_negatives(
     return result
 
 
-def flatten_fewshots(fewshots: list[BaseInferenceModel], seed: int) -> list[BaseTrainingModel]:
+def flatten_fewshots(fewshots: list[BaseModel], seed: int) -> list[BaseModel]:
     """Sample n targets and labels from fewshots data without replacement."""
     flatten_fewshots = []
     for shot in fewshots:
         for idx in range(len(shot.segments)):
             flatten_fewshots.append(
-                BaseTrainingModel(
+                BaseModel(
                     aid=f"{shot.aid}-{idx}",
                     classes=shot.classes,
                     segments=shot.segments[idx],

@@ -9,7 +9,7 @@ import polars as pl
 
 from dataloader import mimic_utils
 from dataloader.constants import PROJECT_ROOT
-from tools.code_trie import XMLTrie, add_hard_negatives_to_set
+from tools.code_trie import XMLTrie
 
 logger = datasets.logging.get_logger(__name__)
 
@@ -53,49 +53,14 @@ class MIMIC_IV_ICD10(datasets.GeneratorBasedBuilder):
 
     BUILDER_CONFIGS = [
         MIMIC_IV_Config(
-            name="icd10pcs-4.0",
+            name="icd9",
             version=datasets.Version("1.0.0", ""),
-            description="MDACE inpatient subset dataset with ICD-10 diagnosis codes and evidence spans.",
+            description="MIMIC IV patient dataset with ICD-9 diagnosis and procedure codes.",
         ),
         MIMIC_IV_Config(
-            name="icd10pcs-4.1",
+            name="icd10",
             version=datasets.Version("1.0.0", ""),
-            description="MDACE inpatient subset dataset with ICD-10 diagnosis codes and evidence spans.",
-        ),
-        MIMIC_IV_Config(
-            name="icd10pcs-4.2",
-            version=datasets.Version("1.0.0", ""),
-            description="MDACE inpatient subset dataset with ICD-10 diagnosis codes and evidence spans.",
-        ),
-        MIMIC_IV_Config(
-            name="icd10pcs-4.3",
-            version=datasets.Version("1.0.0", ""),
-            description="MDACE inpatient subset dataset with ICD-10 diagnosis codes and evidence spans.",
-        ),
-        MIMIC_IV_Config(
-            name="icd10cm-3.0",
-            version=datasets.Version("1.0.0", ""),
-            description="MDACE inpatient subset dataset with ICD-10 diagnosis codes of 3 digits and evidence spans.",
-        ),
-        MIMIC_IV_Config(
-            name="icd10cm-3.1",
-            version=datasets.Version("1.0.0", ""),
-            description="MDACE inpatient subset dataset with ICD-10 diagnosis codes of 4 digits and evidence spans.",
-        ),
-        MIMIC_IV_Config(
-            name="icd10cm-3.2",
-            version=datasets.Version("1.0.0", ""),
-            description="MDACE inpatient subset dataset with ICD-10 diagnosis codes of 5 digits and evidence spans.",
-        ),
-        MIMIC_IV_Config(
-            name="icd10cm-3.3",
-            version=datasets.Version("1.0.0", ""),
-            description="MDACE inpatient subset dataset with ICD-10 diagnosis codes of 6 digits and evidence spans.",
-        ),
-        MIMIC_IV_Config(
-            name="icd10cm-3.4",
-            version=datasets.Version("1.0.0", ""),
-            description="MDACE inpatient subset dataset with ICD-10 diagnosis codes of 7 digits and evidence spans.",
+            description="MIMIC IV patient dataset with ICD-10 diagnosis and procedure codes.",
         ),
     ]
 
@@ -109,47 +74,24 @@ class MIMIC_IV_ICD10(datasets.GeneratorBasedBuilder):
                     mimic_utils.ROW_ID_COLUMN: datasets.Value("string"),
                     "text": datasets.Value("string"),
                     "codes": datasets.Sequence(datasets.Value("string")),
-                    "negatives": datasets.Sequence(datasets.Value("string")),
-                    "code_type": datasets.Value("string"),
-                    "classes": datasets.Value("string"),
                 }
             ),
             citation=_CITATION,
         )
 
-    def parse_config_name(self) -> tuple[str, int]:
-        """Parse the configuration name."""
-        code_type, code_level = self.config.name.split("-")
-        code_level = int(code_level.split(".")[-1])
-        return code_type, code_level
-
     def _split_generators(  # type: ignore
         self, dl_manager: datasets.DownloadManager
     ) -> list[datasets.SplitGenerator]:  # type: ignore
-        code_type, code_level = self.parse_config_name()
-        mimic = self._process_data(code_level=code_level, code_type=code_type)
-        classes = {
-            code: desc
-            for codes, descriptions in zip(mimic["codes"], mimic["code_descriptions"])
-            for code, desc in zip(codes, descriptions)
-        }
-        classes.update(
-            {
-                code: desc
-                for codes, descriptions in zip(mimic["negatives"], mimic["negative_descriptions"])
-                for code, desc in zip(codes, descriptions)
-            }
-        )
-        mimic = mimic.with_columns([pl.lit(json.dumps(classes)).alias("classes")])
+        mimic = self._process_data()
         # Load split information
-        splits = pl.read_ipc(_SPLITS_PATH)
+        splits = pl.read_ipc(_SPLITS_PATH, memory_map=False)
         splits = splits.rename(
             {
                 "_id": mimic_utils.ID_COLUMN,
             }
         )
         data = mimic.join(splits, on=mimic_utils.ID_COLUMN)
-
+        # data = data.with_columns([pl.lit(json.dumps(classes)).alias("classes")])
         return [
             datasets.SplitGenerator(
                 name=datasets.Split.TRAIN,
@@ -165,77 +107,78 @@ class MIMIC_IV_ICD10(datasets.GeneratorBasedBuilder):
             ),
         ]
 
-    def _process_data(
-        self,
-        code_type: str,
-        code_level: int,
-    ) -> pl.DataFrame:
+    def _process_data(self) -> pl.DataFrame:
         """Processes the raw dataset."""
         mimiciv = pl.read_parquet(_MIMICIV_PATH)
 
-        if "cm" in code_type:
-            mimic_code_type_key = "diagnosis"
-            code_system_file = f"{code_type}_tabular_2025.xml"
-        elif "pcs" in code_type:
-            mimic_code_type_key = "procedure"
-            code_system_file = f"{code_type}_tables_2025.xml"
-        else:
-            raise ValueError(f"Invalid code type: {code_type}")
-
-        xml_trie = XMLTrie.from_xml_file(_MEDICAL_CODING_SYSTEMS_DIR / code_system_file, coding_system=code_type)
+        # Filter for code_type
+        mimiciv = mimiciv.filter(
+            pl.col("diagnosis_code_type").str.contains(self.config.name)
+            | pl.col("procedure_code_type").str.contains(self.config.name)
+        )
 
         mimiciv = mimiciv.with_columns(
-            pl.col(f"{mimic_code_type_key}_code_type").alias("code_type"),
-            pl.col(f"{mimic_code_type_key}_codes").alias("codes"),
-        )
-
-        mimiciv_filtered = mimiciv.filter(pl.col("code_type").str.contains(code_type))
-
-        mimiciv_clean = mimic_utils.remove_rare_codes(mimiciv_filtered, code_columns=["codes"], min_count=10)
-
-        # Truncate codes to `code_level` and look up descriptions
-        truncated_mimiciv = mimiciv_clean.with_columns(
-            pl.col("codes")
-            .map_elements(
-                lambda codes: list(set([mimic_utils.truncate_code(code, code_level) for code in codes])),
-                return_dtype=pl.List(pl.Utf8),
+            pl.concat_list([pl.col("diagnosis_codes").fill_null([]), pl.col("procedure_codes").fill_null([])]).alias(
+                "codes"
             )
-            .alias("codes")
-        )
-        truncated_mimiciv = truncated_mimiciv.with_columns(
-            pl.col("codes")
-            .map_elements(
-                lambda codes: [
-                    xml_trie[code].desc if code in xml_trie.lookup else xml_trie[code[:3]].desc for code in codes
-                ],
-                return_dtype=pl.List(pl.Utf8),
-            )
-            .alias("code_descriptions")
         )
 
-        truncated_mimiciv_with_negatives = add_hard_negatives_to_set(truncated_mimiciv, xml_trie, "codes", "negatives")
-        # Truncate negatives to `code_level` and look up descriptions
-        truncated_mimiciv_with_negatives = truncated_mimiciv_with_negatives.with_columns(
-            pl.col("negatives")
-            .map_elements(
-                lambda codes: list(set([mimic_utils.truncate_code(code, code_level) for code in codes])),
-                return_dtype=pl.List(pl.Utf8),
-            )
-            .alias("negatives")
-        )
+        mimiciv_clean = mimic_utils.remove_rare_codes(mimiciv, code_columns=["codes"], min_count=100)
 
-        truncated_mimiciv_with_negatives = truncated_mimiciv_with_negatives.with_columns(
-            pl.col("negatives")
-            .map_elements(
-                lambda codes: [
-                    xml_trie[code].desc if code in xml_trie.lookup else xml_trie[code[:3]].desc for code in codes
-                ],
-                return_dtype=pl.List(pl.Utf8),
+        if self.config.name == "icd9":
+            code_descriptions = mimic_utils.get_icd9_descriptions(_MEDICAL_CODING_SYSTEMS_DIR)
+            code_to_desc = dict(zip(code_descriptions["icd9_code"], code_descriptions["icd9_description"]))
+            mimiciv = self._get_code_descriptions(mimiciv_clean, "codes", code_to_desc)
+        elif self.config.name == "icd10":
+            diag_xml_trie = XMLTrie.from_xml_file(
+                _MEDICAL_CODING_SYSTEMS_DIR / "icd10cm_tabular_2025.xml", coding_system="icd10cm"
             )
-            .alias("negative_descriptions")
-        )
+            proc_xml_trie = XMLTrie.from_xml_file(
+                _MEDICAL_CODING_SYSTEMS_DIR / "icd10pcs_tables_2025.xml", coding_system="icd10pcs"
+            )
 
-        return truncated_mimiciv_with_negatives.filter(pl.col("codes").is_not_null())
+            mimiciv = mimiciv.with_columns(
+                pl.col("codes")
+                .map_elements(
+                    lambda codes: [
+                        diag_xml_trie[code].desc
+                        if code in diag_xml_trie.lookup
+                        else proc_xml_trie[code].desc
+                        if code in proc_xml_trie.lookup
+                        else None
+                        for code in codes
+                    ],
+                    return_dtype=pl.List(pl.Utf8),
+                )
+                .alias("code_descriptions")
+            )
+            # loop over codes for each row and filter out those codes whose descriptions are None based on the list
+            mimiciv = mimiciv.with_columns(
+                pl.col("codes").map_elements(
+                    lambda codes: [
+                        code for code in codes if code in diag_xml_trie.lookup or code in proc_xml_trie.lookup
+                    ],
+                    return_dtype=pl.List(pl.Utf8),
+                )
+            )
+
+        else:
+            raise ValueError(f"Invalid code type: {self.config.name}")
+
+        # filter out those codes (pl.col("codes")) whose descriptions (pl.col("code_descriptions")) are None
+
+        return mimiciv.drop(
+            [
+                "diagnosis_codes",
+                "procedure_codes",
+                "diagnosis_code_type",
+                "procedure_code_type",
+                "charttime",
+                "storetime",
+                "note_type",
+                "note_seq",
+            ]
+        )
 
     def _generate_examples(  # type: ignore
         self, data: pl.DataFrame

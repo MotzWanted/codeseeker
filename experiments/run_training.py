@@ -7,6 +7,7 @@ import re
 import typing as typ
 from pathlib import Path
 
+
 import datasets
 import pydantic
 import rich
@@ -14,6 +15,7 @@ import torch
 import transformers
 from jinja2 import Environment, FileSystemLoader
 from lightning.fabric.strategies import FSDPStrategy
+from lightning.pytorch.profilers import PyTorchProfiler
 from loguru import logger
 from outlines.processors.base_logits_processor import OutlinesLogitsProcessor
 from peft.tuners.lora.layer import LoraLayer
@@ -31,7 +33,7 @@ import wandb
 from wandb.integration.lightning.fabric import WandbLogger
 
 import dataloader
-from alignment.aligners import templates
+from agents.aligners import templates
 from dataloader import mimiciii_50, mimiciv, mimiciv_50
 from dataloader.adapt.base import BaseTrainingModel
 from dataloader.base import DatasetConfig
@@ -52,7 +54,6 @@ DATASET_CONFIGS: dict[str, dict] = {
         "subsets": ["icd10"],
         "options": {
             "subset_size": 300,
-            "segmenter": SEGMENTER,
             "adapter": "MimicForTrainingAdapter",
             "order": "alphabetical",
         },
@@ -63,7 +64,6 @@ DATASET_CONFIGS: dict[str, dict] = {
         "subsets": ["icd10cm-3.0"],
         "options": {
             "negatives": 100,
-            "segmenter": SEGMENTER,
             "adapter": "MimicForTrainingAdapter",
         },
     },
@@ -74,24 +74,22 @@ DATASET_CONFIGS: dict[str, dict] = {
         "options": {
             "negatives": 100,
             "hard_negatives": 1.0,
-            "segmenter": SEGMENTER,
             "adapter": "MimicForTrainingAdapter",
         },
     },
     "mimic-iii-50": {
         "identifier": "mimic-iii-50",
         "name_or_path": mimiciii_50,
-        "options": {"segmenter": SEGMENTER, "adapter": "MimicForTrainingAdapter", "order": "alphabetical"},
+        "options": {"adapter": "MimicForTrainingAdapter", "order": "alphabetical"},
     },
     "mimic-iv-50": {
         "identifier": "mimic-iv-50",
         "name_or_path": mimiciv_50,
         "subsets": ["icd10"],
         "options": {
-            "segmenter": SEGMENTER,
-            "subset_size": 11_000,
             "adapter": "MimicForTrainingAdapter",
             "order": "alphabetical",
+            "negatives": 50,
         },
     },
 }
@@ -101,12 +99,12 @@ class Arguments(BaseSettings):
     """Script arguments."""
 
     project_name: str = "mimic-50"
-    dataset: str = "mimic-iii-50"
+    dataset: str = "mimic-iv-50"
 
-    version: str = "v2"
-    backbone: str = "meta-llama/Llama-3.2-1B-Instruct"
+    version: str = "v0"
+    backbone: str = "meta-llama/Llama-3.2-1B"
     output_path: str = Path("~/research/models/{version}-{backbone}-{dataset}-align").expanduser().as_posix()
-    debug: int = 0
+    debug: int = 1
     # Training details
     prompt_name: str = "icdcm_v2_it"  # lookup in `src/alignment/templates`
     logits_processor: functools.partial[OutlinesLogitsProcessor] | None = None
@@ -114,6 +112,8 @@ class Arguments(BaseSettings):
     #     RegexLogitsProcessor, regex_string=r"(?:[1-9]\d{0,3})(?:,(?:[1-9]\d{0,3})){0,39}"
     # )
     train_size: int = 7_500
+    val_size: int = 2_000
+    test_size: int = 2_000
     batch_size: int = 1
     eval_batch_size: int = 1
     micro_batch_size: int = 1
@@ -126,7 +126,7 @@ class Arguments(BaseSettings):
     seed: int = 1
     # Training strategy - lightning
     strategy: str = "ddp"  # "deepspeed" | "dpp" | "fsdp" | "ddp_spawn"
-    devices: list[int] | int | str = [0, 1]
+    devices: list[int] | int | str = [4, 5]
     precision: str = "bf16-true"  # bf16-mixed
     quantize: str = "none"  # "nf4"  # none | nf4
     attn: str = "flash_attention_2"
@@ -135,8 +135,8 @@ class Arguments(BaseSettings):
     do_sample: bool = False
     # Peft
     peft: str = "LORA"  # none | LORA
-    lora_r: int = 128
-    lora_alpha: int = 64
+    lora_r: int = 32
+    lora_alpha: int = 32
     lora_dropout: float = 0.0
     lora_target_modules: list[str] = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
     # Loop details
@@ -144,14 +144,14 @@ class Arguments(BaseSettings):
     tack_mode: str = "max"
     num_workers: int = 16
     log_freq: int = 20
-    eval_freq: int = 100
+    eval_freq: int = 250
     generate_freq: int = -1
     max_eval: int = 1_024
     pbar_keys: str = r"(target_loss)|(f1_micro)"
     # Tokenizer
-    max_new_tokens: int = 48
-    max_length: int = 32_064
-    filter_longer_than: int = 32_000
+    max_new_tokens: int = 64
+    max_length: int = 8_094
+    filter_longer_than: int = 8_094
     padding: str = "longest"
     truncation: int = 1
 
@@ -207,17 +207,6 @@ def custom_tojson(value):
 
 def run(args: Arguments) -> None:
     """Train a Multi-segment classification model."""
-    # if args.debug > 0:
-    # profiler = torch.profiler.profile(
-    #     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
-    #     schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=args.log_freq),
-    #     on_trace_ready=helpers.trace_handler,
-    #     record_shapes=True,
-    #     profile_memory=True,
-    #     with_stack=True,
-    #     with_modules=True,
-    # )
-    # profiler.start()
     # Raise an error if the strategy is FSDP and quantization is enabled
     if args.strategy == "fsdp" and args.quantize != "none":
         raise ValueError("FSDP does not (currently) support quantization.")
@@ -261,6 +250,21 @@ def run(args: Arguments) -> None:
                 copy_files=[templates.__file__],
             ),
             *((PrintCallback(),) if args.debug else ()),
+            *(
+                (
+                    PyTorchProfiler(
+                        activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                        schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=args.log_freq),
+                        on_trace_ready=torch.profiler.tensorboard_trace_handler("./log/profile"),
+                        record_shapes=True,
+                        profile_memory=True,
+                        with_stack=True,
+                        with_modules=True,
+                    ),
+                )
+                if args.debug > 1
+                else ()
+            ),
         ],
     )
 
@@ -281,7 +285,6 @@ def run(args: Arguments) -> None:
     )
     if fabric.is_global_zero:
         rich.print(model)
-
     # Check if the model uses GQA
     if not model.config.num_key_value_heads < model.config.num_attention_heads:
         logger.warning("Model does not use GQA, which may lead to higher memory consumption.")
@@ -370,8 +373,6 @@ def run(args: Arguments) -> None:
             patterns=[tokenizer.eos_token],
         ),
     )
-    # if args.debug > 0:
-    #     profiler.stop()
 
     # Run on the test set
     with IterProgressBar(disable=not fabric.is_global_zero) as pbar:
@@ -488,6 +489,12 @@ def _load_dataset(
     if len(data["train"]) > args.train_size:
         data["train"] = data["train"].select(range(args.train_size))
 
+    if len(data["validation"]) > args.val_size:
+        data["validation"] = data["validation"].select(range(args.val_size))
+
+    if len(data["test"]) > args.test_size:
+        data["test"] = data["test"].select(range(args.test_size))
+
     if args.dataset == "debug":
         data["test"] = data["test"].select(range(25))
         data["validation"] = data["validation"].select(range(25))
@@ -545,10 +552,10 @@ class _PromptWrapper:
 
     def __call__(self, row: BaseTrainingModel) -> tuple[str, str]:
         """Make a training example and format the task as a prompt."""
-        targets = row.parse_targets()
+        classes, targets = row.parse_targets()
         prompt = Prompt(
             raw_template=self.raw_template,
-            template_data={**row.model_dump(), "targets": targets, "custom_tojson": custom_tojson},
+            template_data={**row.model_dump(), "classes": classes, "targets": targets, "custom_tojson": custom_tojson},
         )
         return prompt.string, targets
 

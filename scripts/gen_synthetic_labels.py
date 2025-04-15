@@ -10,8 +10,8 @@ import pydantic
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-from alignment.aligners.llm import create_llm_aligner
-from alignment.ops import HfSyntheticAlignment
+from agents.aligners.llm import create_llm_aligner
+from agents.ops import HfSyntheticAlignment
 from dataloader.loaders.nbme.nbme_notes import NbmeDatasetLoader
 from dataloader.adapt.alignment import NbmeAdapter
 from throughster.factory import create_interface

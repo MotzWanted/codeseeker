@@ -357,7 +357,7 @@ class TrieClassificationMonitor(Monitor):
 
     def __init__(
         self,
-        trie: OrderedDict[str, str],
+        trie: OrderedDict[str, int],
         keys: list[str] = [],
         tokenizer: transformers.PreTrainedTokenizerBase | None = None,
     ) -> None:
@@ -404,9 +404,11 @@ class TrieClassificationMonitor(Monitor):
         output["f1_macro"] = macro_f1
 
         # Classification Metrics
+        output["micro_recall"] = micro_recall
+        output["micro_precision"] = micro_precision
         output["accuracy"] = self.aggregators["_hit"].get()
         output["prediction-bias-ratio"] = self.aggregators["pos_ratio"].get()
-        output["table"] = self._make_table_date(f1_per_class, tp, fp, fn, self.aggregators["tn"].get())
+        # output["table"] = self._make_table_date(f1_per_class, tp, fp, fn, self.aggregators["tn"].get())
         return output
 
     def update(
@@ -414,6 +416,7 @@ class TrieClassificationMonitor(Monitor):
         *,
         target_input_ids: None | torch.Tensor | list[set[int]] = None,
         preds_input_ids: None | torch.Tensor | list[set[int]] = None,
+        list_of_classes: list[dict[str, typ.Any]] | None = None,
         **kws: typ.Any,
     ) -> None:
         """Update the metrics."""
@@ -429,8 +432,14 @@ class TrieClassificationMonitor(Monitor):
             preds_input_ids = self._parse_tokens_fn(preds_tokens)
             target_input_ids = self._parse_tokens_fn(target_tokens)
 
-        prediction_matrix = list2tensor_vectorized(len(preds_input_ids), self.num_classes, preds_input_ids)
-        target_matrix = list2tensor_vectorized(len(target_input_ids), self.num_classes, target_input_ids)
+        mapped_predictions = []
+        mapped_targets = []
+        for targets, predictions, classes in zip(target_input_ids, preds_input_ids, list_of_classes):
+            mapped_predictions.append([self.trie[classes[idx - 1]["name"]] for idx in predictions])
+            mapped_targets.append([self.trie[classes[idx - 1]["name"]] for idx in targets])
+
+        prediction_matrix = list2tensor_vectorized(len(preds_input_ids), self.num_classes, mapped_predictions)
+        target_matrix = list2tensor_vectorized(len(target_input_ids), self.num_classes, mapped_targets)
 
         # Compute the true/false negatives/positives
         conf_matrix = self._make_conf_matrix(target_matrix, prediction_matrix)
