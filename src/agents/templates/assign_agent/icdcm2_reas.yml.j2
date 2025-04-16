@@ -9,7 +9,7 @@
   content: |
     ====== Diagnosis Codes ======
     {% for c in classes %}
-    ID: {{ loop.index }} | Chapter: {{ c.chapter_id }} | Code: {{ custom_tojson(c.name) }} | Description: {{ custom_tojson(c.description) }} | Etiology: {{ c.etiology }} | Manifestation: {{ c.manifestation }} | ID END: {{ loop.index }}
+    ID: {{ loop.index }} | Code: {{ custom_tojson(c.name) }} | Description: {{ custom_tojson(c.description) }} | ID END: {{ loop.index }}
     {% endfor %}\n
 
 - name: new input

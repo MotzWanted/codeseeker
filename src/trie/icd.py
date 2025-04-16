@@ -22,11 +22,18 @@ class ICD10Trie(Trie):
         super().__init__(*args, **kwargs)
         self.files_map = models.ICDFileMap.from_directory(path_to_files)
         with Console() as console:
-            files_to_parse = [file.name for file in self.files_map.model_dump(exclude_none=True).values()]
-            console.print(f"[bold blue] Following files will be parsed: {files_to_parse} [/bold blue]")
+            files_to_parse = [
+                file.name
+                for file in self.files_map.model_dump(exclude_none=True).values()
+            ]
+            console.print(
+                f"[bold blue] Following files will be parsed: {files_to_parse} [/bold blue]"
+            )
 
     @classmethod
-    def from_cms(cls, year: int, use_update: bool = False, *args, **kwargs) -> "ICD10Trie":
+    def from_cms(
+        cls, year: int, use_update: bool = False, *args, **kwargs
+    ) -> "ICD10Trie":
         """Download the ICD files from CMS for the specified year
         (preferring updated 'month-tagged' versions if use_update is True),
         then build and return the trie.
@@ -46,7 +53,7 @@ class ICD10Trie(Trie):
             raise FileNotFoundError(f"Directory {local_directory} does not exist.")
         return cls(local_directory, *args, **kwargs)
 
-    def parse(self) -> "ICD10Trie":
+    def parse(self) -> None:
         """Parse the downloaded ICD files."""
         self.parse_tabular_files()
 
@@ -87,7 +94,9 @@ class ICD10Trie(Trie):
         num_digits = len(str(len(terms)))
         id_format = f"{{:0{num_digits}d}}"
         for idx, term in track(
-            enumerate(terms, start=1), description="Parsing ICD-10 Alphabetic Indexes", total=len(terms)
+            enumerate(terms, start=1),
+            description="Parsing ICD-10 Alphabetic Indexes",
+            total=len(terms),
         ):
             parent_id = id_format.format(idx)
             if isinstance(term.code, list):
@@ -115,7 +124,9 @@ class ICD10Trie(Trie):
             if term.sub_terms:
                 self.insert_sub_terms_into_trie(term.sub_terms, parent_id)
 
-    def insert_sub_terms_into_trie(self, sub_terms: list[models.CmIndexTerm | models.Term], parent_id: str) -> None:
+    def insert_sub_terms_into_trie(
+        self, sub_terms: list[models.CmIndexTerm], parent_id: str
+    ) -> None:
         """Insert terms into the trie."""
         for idx, term in enumerate(sub_terms):
             current_id = f"{parent_id}.{idx}"
@@ -144,7 +155,7 @@ class ICD10Trie(Trie):
             if isinstance(term, models.CmIndexTerm) and term.sub_terms:
                 self.insert_sub_terms_into_trie(term.sub_terms, current_id)
 
-    def handle_cell_terms(self, term: models.Term, cells: list[models.CmCell]) -> list[models.CmCell]:
+    def handle_cell_terms(self, term: models.Term, cells: list[models.CmCell]) -> None:
         """Handle multi-column CmCell list."""
         self.insert_to_index(term)
         cell_codes = [
@@ -176,7 +187,9 @@ class ICD10Trie(Trie):
         self.tabular[root.id] = root
 
         for table_index, table in track(
-            enumerate(tables, start=1), description="Parsing ICD-10-PCS tables", total=len(tables)
+            enumerate(tables, start=1),
+            description="Parsing ICD-10-PCS tables",
+            total=len(tables),
         ):
             table_node = models.Category(
                 id=table.table_id,
@@ -202,16 +215,30 @@ class ICD10Trie(Trie):
                 # Combine axis labels to form codes
                 self._insert_pcs_axes(table, pcs_row, parent_id=row_node.id)
 
-    def _insert_pcs_axes(self, table: list[models.PcsTable], row: models.PcsRow, parent_id: str):
+    def _insert_pcs_axes(
+        self, table: models.PcsTable, row: models.PcsRow, parent_id: str
+    ):
         """Insert all valid PCS code combinations generated from table + row axes.
 
         `table_axes` contains fixed axis values (e.g., Section, Body System, Operation) with one label each.
         `row_axes` contains variable axis values with multiple label options.
         """
         base_code = "".join([axis.code for axis in table.table_axes])
-        base_desc = ". ".join(f"{axis.title}: {axis.label}" for axis in table.table_axes).strip()
+        base_desc = ". ".join(
+            f"{axis.title}: {axis.label}" for axis in table.table_axes
+        ).strip()
 
-        variable_axes = [[models.PcsCode(id="", name=base_code, parent_id="", description=base_desc, assignable=False)]]
+        variable_axes = [
+            [
+                models.PcsCode(
+                    id="",
+                    name=base_code,
+                    parent_id="",
+                    description=base_desc,
+                    assignable=False,
+                )
+            ]
+        ]
         for axis in row.axes:
             variable_axes.append(
                 [
@@ -229,10 +256,14 @@ class ICD10Trie(Trie):
         # Generate all combinations of codes (cartesian product)
         size = reduce(mul, (len(sublist) for sublist in variable_axes), 1)
         if row.codes != size:
-            raise ValueError(f"Number of codes ({row.codes}) does not match the expected number ({len(size)}).")
+            raise ValueError(
+                f"Number of codes ({row.codes}) does not match the expected number ({len(size)})."
+            )
         for combination in itertools.product(*variable_axes):
             combined_code = "".join([code.name for code in combination])
-            combined_desc = ". ".join([code.description for code in combination]).strip()
+            combined_desc = ". ".join(
+                [code.description for code in combination]
+            ).strip()
             new_code = models.PcsCode(
                 id=combined_code,
                 name=combined_code,
@@ -273,7 +304,10 @@ class ICD10Trie(Trie):
                     self._insert_cm_diag(diag, parent_id=sec_node.id)
 
     def _insert_cm_diag(
-        self, diag: models.CmDiag, parent_id: str, seven_chr: list[models.SeventhCharacter] = []
+        self,
+        diag: models.CmDiag,
+        parent_id: str,
+        seven_chr: list[models.SeventhCharacter] = [],
     ) -> None:
         """Insert a CM diagnosis into the trie."""
         if diag.children:

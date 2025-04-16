@@ -9,7 +9,7 @@ authors = [
     { name = "Valentin Liévin", email = "vli@corti.ai" }
 ]
 dependencies = [
-    "pydantic>=2.7",
+    "pydantic>=2.11.3",
     "pydantic-settings>=2.2.1",
     "loguru>=0.7.2",
     "transformers>=4.48.3",
@@ -18,7 +18,7 @@ dependencies = [
     "numba>=0.60.0",
     "peft>=0.14.0",
     "wandb>=0.19.1",
-    "prompt-poet>=0.0.40",
+    "prompt-poet<=0.0.42",
     "tiktoken>=0.7.0",
     "mlflow>=2.15.1",
     "pyahocorasick>=2.1.0",

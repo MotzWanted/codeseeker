@@ -91,16 +91,24 @@ class Trie(ABC):
     def get_root_leaves(self, root: str) -> list[models.Code]:
         """Get all codes under a specific root."""
         if root not in self.roots:
-            raise ValueError(f"Root {root} does not exist in the trie. Available roots: {self.roots}")
+            raise ValueError(
+                f"Root {root} does not exist in the trie. Available roots: {self.roots}"
+            )
         root_node = self.tabular[root]
-        return [self.tabular[code_id] for code_id in root_node.children_ids if self.tabular[code_id].assignable]
+        return [
+            self.tabular[code_id]
+            for code_id in root_node.children_ids
+            if self.tabular[code_id].assignable
+        ]
 
-    def insert_to_tabular(self, node: models.Root | models.Category | models.Code) -> None:
+    def insert_to_tabular(
+        self, node: models.Root | models.Category | models.Code
+    ) -> None:
         """Insert a node into the trie."""
         if node.id in self.tabular:
             raise ValueError(f"Node with id {node.id} already exists in the trie.")
 
-        self.tabular[node.id] = node
+        self.tabular[node.id] = node  # type: ignore
         if isinstance(node, models.Code):
             if node.id in self.lookup:
                 raise ValueError(f"Code {node.name} already exists in the lookup.")
@@ -127,7 +135,7 @@ class Trie(ABC):
     @abstractmethod
     def parse(self, *args, **kwargs) -> "Trie":
         """Abstract method to parse the trie. Must be implemented by subclasses."""
-        NotImplementedError
+        ...
 
     # def get_guidelines(self, codes: list[str]) -> dict[str, typing.Any]:
     #     guideline_fields = [
