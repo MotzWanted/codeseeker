@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from functools import partial
 import hashlib
 import pathlib
@@ -6,6 +7,10 @@ import datasets
 import pydantic
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from throughster.factory import create_interface
+import torch
+
+from finetune.helpers import list2tensor_vectorized
+from finetune.monitor import ClassAggregator, MeanAggregator, Monitor
 
 DUMP_FOLDER = pathlib.Path("~/research/codeseeker/experiments").expanduser()
 
@@ -25,6 +30,8 @@ class BaseArguments(BaseSettings):
     dataset: str
     seed: str
 
+    prompt_name: str
+
     num_workers: int
     batch_size: int
 
@@ -39,29 +46,47 @@ class BaseArguments(BaseSettings):
     def _hash(self) -> str:
         """Create unique identifier for the arguments"""
         model_dict = self.model_dump(
-            exclude={"_hash", "_deployment_name", "experiment_folder", "experiment_name", "seed", "fewshots"}
+            exclude={
+                "_hash",
+                "_deployment_name",
+                "experiment_folder",
+                "experiment_name",
+                "seed",
+            }
         )
         return hashlib.md5(str(model_dict).encode()).hexdigest()
 
     @pydantic.computed_field
     def experiment_folder(self) -> str:
         """Get the experiment name."""
-        return f"{self.experiment_name}/{self._deployment_name}"
+        return f"{self.experiment_id}/{self.experiment_name}/{self._deployment_name}"
 
     @pydantic.computed_field
     def _seeds(self) -> list[int]:
         """Get the seeds."""
-        return [int(x) for x in self.seed.split(":")] if ":" in self.seed else [int(self.seed)]
+        return (
+            [int(x) for x in self.seed.split(":")]
+            if ":" in self.seed
+            else [int(self.seed)]
+        )
 
     @pydantic.computed_field
     def _datasets(self) -> list[str]:
         """Get the datasets."""
-        return [x for x in self.dataset.split(":")] if ":" in self.dataset else [self.dataset]
+        return (
+            [x for x in self.dataset.split(":")]
+            if ":" in self.dataset
+            else [self.dataset]
+        )
 
     @pydantic.computed_field
     def _prompts(self) -> list[str]:
         """Get the prompts."""
-        return [x for x in self.prompt_name.split(":")] if ":" in self.prompt_name else [self.prompt_name]
+        return (
+            [x for x in self.prompt_name.split(":")]
+            if ":" in self.prompt_name
+            else [self.prompt_name]
+        )
 
 
 def _get_dataset(dset: datasets.Dataset | datasets.DatasetDict) -> datasets.Dataset:
@@ -72,7 +97,12 @@ def _get_dataset(dset: datasets.Dataset | datasets.DatasetDict) -> datasets.Data
 
 
 def _init_client_fn(
-    provider: str, api_base: str, endpoint: str, deployment: str, use_cache: bool, **kwargs
+    provider: str,
+    api_base: str,
+    endpoint: str,
+    deployment: str,
+    use_cache: bool,
+    **kwargs,
 ) -> typ.Callable:
     return partial(
         create_interface,
@@ -83,3 +113,128 @@ def _init_client_fn(
         use_cache=use_cache,
         cache_dir=str(pathlib.Path(f"~/.cache/throughster/{deployment}").expanduser()),
     )
+
+
+class TrieClassificationMonitor(Monitor):
+    """Monitor for classification tasks."""
+
+    def __init__(
+        self,
+        trie: OrderedDict[str, int],
+        keys: list[str] = [],
+    ) -> None:
+        super().__init__()
+        self.keys = keys
+        self.num_classes = len(trie)
+        self.trie = trie
+        self.class_aggregators = torch.nn.ModuleDict(
+            {
+                **{
+                    k: ClassAggregator(self.num_classes)
+                    for k in ["tp", "fp", "fn", "tn"]
+                },
+            }
+        )
+        self.aggregators = torch.nn.ModuleDict(
+            {
+                **{
+                    k: ClassAggregator(self.num_classes)
+                    for k in ["tp", "fp", "fn", "tn"]
+                },
+                **{k: MeanAggregator() for k in [*self.keys, "_hit", "pos_ratio"]},
+            }
+        )
+
+    def get(self) -> dict[str, torch.Tensor]:
+        """Get values from all aggregators."""
+        output = {key: self.aggregators[key].get() for key in self.keys}
+        tp = self.aggregators["tp"].get()
+        fp = self.aggregators["fp"].get()
+        fn = self.aggregators["fn"].get()
+        # Micro F1
+        micro_precision = tp.sum() / (tp.sum() + fp.sum() + 1e-10)
+        micro_recall = tp.sum() / (tp.sum() + fn.sum() + 1e-10)
+        output["f1_micro"] = (
+            2
+            * (micro_precision * micro_recall)
+            / (micro_precision + micro_recall + 1e-10)
+        )
+
+        # Macro F1 (ignoring TN-only classes)
+        precision_per_class = tp / (tp + fp + 1e-10)
+        recall_per_class = tp / (tp + fn + 1e-10)
+        f1_per_class = (
+            2
+            * (precision_per_class * recall_per_class)
+            / (precision_per_class + recall_per_class + 1e-10)
+        )
+
+        # Exclude classes where TP + FP + FN = 0 (TN-only classes)
+        valid_classes = (tp + fp + fn) > 0
+        if valid_classes.any():  # Ensure there are valid classes
+            macro_f1 = f1_per_class[valid_classes].mean()
+        else:
+            macro_f1 = torch.tensor(
+                0.0
+            )  # Handle edge case where no valid classes exist
+
+        output["f1_macro"] = macro_f1
+
+        # Classification Metrics
+        output["micro_recall"] = micro_recall
+        output["micro_precision"] = micro_precision
+        output["accuracy"] = self.aggregators["_hit"].get()
+        output["prediction-bias-ratio"] = self.aggregators["pos_ratio"].get()
+        # output["table"] = self._make_table_date(f1_per_class, tp, fp, fn, self.aggregators["tn"].get())
+        return output
+
+    def update(
+        self,
+        *,
+        target_inputs: list[list[str]],
+        pred_inputs: list[list[str]],
+        **kws: typ.Any,
+    ) -> None:
+        """Update the metrics."""
+        for key in self.keys:
+            self.aggregators[key].update(kws[key])
+
+        targets = [set(t) for t in target_inputs]
+        predictions = [set(p) for p in pred_inputs]
+
+        prediction_ids = []
+        target_ids = []
+        for targets, predictions in zip(targets, predictions):
+            prediction_ids.append([self.trie[code_name] for code_name in predictions])
+            target_ids.append([self.trie[code_name] for code_name in targets])
+
+        prediction_matrix = list2tensor_vectorized(
+            len(prediction_ids), self.num_classes, prediction_ids
+        )
+        target_matrix = list2tensor_vectorized(
+            len(target_ids), self.num_classes, target_ids
+        )
+
+        # Compute the true/false negatives/positives
+        conf_matrix = self._make_conf_matrix(target_matrix, prediction_matrix)
+        for k, v in conf_matrix.items():
+            self.aggregators[k].update(v)
+
+    @staticmethod
+    def _make_conf_matrix(
+        targets: torch.Tensor, preds: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Compute the true/false positives."""
+        _targets = targets.bool()
+        _preds = preds.bool()
+
+        return {
+            "tp": (_targets & _preds).sum(dim=0),
+            "fp": (_preds & ~_targets).sum(dim=0),
+            "fn": (_targets & ~_preds).sum(dim=0),
+            "tn": (~_targets & ~_preds).sum(dim=0),
+            "_hit": (~(_targets ^ _preds))
+            .all(dim=1)
+            .float(),  # counting row wise exact matches
+            "pos_ratio": preds.sum() / targets.sum(),
+        }

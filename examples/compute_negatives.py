@@ -3,13 +3,14 @@ import json
 import pydantic
 from openai import OpenAI
 from tqdm import tqdm
-from tools.code_trie import XMLTrie
-from dataloader import mimic_utils
+import dataloader
+from dataloader.base import DatasetConfig
 import datasets
 import pandas as pd
 import torch
 
 from dataloader.constants import PROJECT_ROOT
+from trie.icd import ICD10Trie
 
 _MEDICAL_CODING_SYSTEMS_DIR = PROJECT_ROOT / "data/medical-coding-systems/icd"
 
@@ -19,7 +20,7 @@ class Arguments(pydantic.BaseModel):
     embedding_host: str = "localhost"
     embedding_port: int = 6538
     embedding_model: str = "BAAI/bge-multilingual-gemma2"
-    coding_system: str = "icd10cm_tabular_2022"
+    coding_system: str = "icd10cm_2022"
 
 
 class EmbeddingClient:
@@ -46,34 +47,27 @@ class EmbeddingClient:
 
 
 def main(args: Arguments):
-    client = EmbeddingClient(f"http://{args.embedding_host}:{args.embedding_port}/v1/", args.embedding_model)
+    client = EmbeddingClient(
+        f"http://{args.embedding_host}:{args.embedding_port}/v1/", args.embedding_model
+    )
 
-    if "icd10" in args.coding_system:
-        diag_xml_trie = XMLTrie.from_xml_file(
-            _MEDICAL_CODING_SYSTEMS_DIR / f"{args.coding_system}.xml",  # type: ignore
-            coding_system="icd10cm",
-            use_cache=False,
-        )
-        code_lookup = {}
-        for code in diag_xml_trie.all:
-            if not diag_xml_trie[code].assignable:
-                continue
-            code_lookup[code] = diag_xml_trie[code].description
-        # proc_xml_trie = XMLTrie.from_xml_file(
-        #     _MEDICAL_CODING_SYSTEMS_DIR / "icd10pcs_tables_2025.xml",  # type: ignore
-        #     coding_system="icd10pcs",
-        # )
-        # code_lookup = {}
-        # for code in proc_xml_trie.all:
-        #     if not getattr(proc_xml_trie[code], "description", None):
-        #         continue
-        #     code_lookup[code] = proc_xml_trie[code].description
-    elif args.coding_system == "icd9":
-        code_descriptions = mimic_utils.get_icd9_descriptions(_MEDICAL_CODING_SYSTEMS_DIR)
-        code_lookup = dict(zip(code_descriptions["icd9_code"], code_descriptions["icd9_description"]))
+    xml_trie = ICD10Trie.from_cms(year=2018)
+    xml_trie.parse()
+    mdace_config: DatasetConfig = DatasetConfig(
+        **dataloader.DATASET_CONFIGS["mdace-icd10cm"]
+    )
+    mdace = dataloader.load_dataset(mdace_config)
+    mdace = datasets.concatenate_datasets(mdace.values())  # type: ignore
 
-    codes = list(code_lookup.keys())
-    descriptions = list(code_lookup.values())
+    unique_codes: set[str] = set()
+    for codes in mdace["targets"]:
+        unique_codes.update(codes)
+
+    cm_codes = xml_trie.get_root_leaves(root="cm")
+    unique_cm_codes = set(code.name for code in cm_codes)
+    codes = list(unique_codes | unique_cm_codes)
+    descriptions = [xml_trie[code].description for code in codes]
+
     dataset = datasets.Dataset.from_dict({"codes": codes, "descriptions": descriptions})
 
     dataset = dataset.map(

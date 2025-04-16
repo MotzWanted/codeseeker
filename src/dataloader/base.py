@@ -8,7 +8,9 @@ from datasets import fingerprint
 from pydantic_settings import SettingsConfigDict
 
 
-CACHE_DIR = str(pathlib.Path(os.environ.get("CACHE_DIR", "~/.cache/docgen")).expanduser())
+CACHE_DIR = str(
+    pathlib.Path(os.environ.get("CACHE_DIR", "~/.cache/docgen")).expanduser()
+)
 DATASETS_CACHE_PATH = str(pathlib.Path(CACHE_DIR, "datasets"))
 
 
@@ -34,19 +36,13 @@ class DatasetOptions(pydantic.BaseModel):
         default=None,
         description="Take a subset of the dataset.",
     )
-    negatives: int = pydantic.Field(
-        default=0,
-        description="Number of negative examples to sample.",
-    )
-    hard_negatives: float = pydantic.Field(
-        default=0.0,
-        description="Fraction of hard negatives to sample.",
-    )
     seed: int = pydantic.Field(
         default=0,
         description="Seed for reproducibility.",
     )
-    adapter: None | str = pydantic.Field(default=None, description="Adapter for the dataset.")
+    adapter: None | str = pydantic.Field(
+        default=None, description="Adapter for the dataset."
+    )
     model_config = SettingsConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
 
@@ -78,7 +74,9 @@ class DatasetConfig(pydantic.BaseModel):
         description="Loading/preprocessing options.",
     )
 
-    model_config = SettingsConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid", from_attributes=True)
+    model_config = SettingsConfigDict(
+        frozen=True, arbitrary_types_allowed=True, extra="forbid", from_attributes=True
+    )
 
     def __hash__(self) -> int:
         """Hash the object based on its name and split."""
@@ -104,7 +102,9 @@ class DatasetConfig(pydantic.BaseModel):
 
     @pydantic.field_validator("subsets", mode="before")
     @classmethod
-    def _validate_subsets(cls: type[typ.Self], value: None | str | list[str]) -> list[str]:
+    def _validate_subsets(
+        cls: type[typ.Self], value: None | str | list[str]
+    ) -> list[str]:
         if value is None:
             return []
         if isinstance(value, str):

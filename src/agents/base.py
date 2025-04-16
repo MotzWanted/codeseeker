@@ -1,13 +1,25 @@
-from abc import ABC, abstractmethod
+from abc import abstractmethod
+import asyncio
+from collections import defaultdict
 import json
 from pathlib import Path
 import re
+import typing as typ
 
+from jinja2 import Environment, FileSystemLoader
 import numpy as np
+from prompt_poet import Prompt
 
-from agents.models import Alignment
+import pydantic
+from throughster.base import ModelInterface
+from throughster.hf_datasets import HfOperation
+
+from trie.base import Trie
 
 PATH_TO_TEMPLATES = Path(__file__).parent / "templates"
+
+InputModel = typ.TypeVar("InputModel", bound=pydantic.BaseModel)
+OutputModel = typ.TypeVar("OutputModel", bound=pydantic.BaseModel)
 
 
 def custom_tojson(value):
@@ -23,7 +35,9 @@ def custom_tojson(value):
     return json.dumps(sanitized_value, ensure_ascii=False)
 
 
-def list2matrix(dim_x: int, dim_y: int, alignment_indices: list[list[int | float]]) -> np.ndarray:
+def list2matrix(
+    dim_x: int, dim_y: int, alignment_indices: list[list[int | float]]
+) -> np.ndarray:
     sparse_matrix = np.zeros((dim_x, dim_y), dtype=np.float32)
     for i, preds in enumerate(alignment_indices):
         for pred in preds:
@@ -47,8 +61,87 @@ def matrix2list(sparse_matrix: np.ndarray) -> list:
     return alignment_indices
 
 
-class Aligner(ABC):
-    """An abstract class for an alignment model."""
+class HfBaseAgent(HfOperation, typ.Generic[InputModel, OutputModel]):
+    """Base class for coding agents."""
+
+    def __init__(
+        self,
+        trie: Trie,
+        init_client_fn: typ.Callable[..., ModelInterface],
+        prompt_name: str,
+        seed: int,
+        sampling_params: dict[str, typ.Any],
+    ):
+        self.trie: Trie = trie
+        self.init_client_fn = init_client_fn
+        env = Environment(loader=FileSystemLoader(PATH_TO_TEMPLATES), autoescape=False)
+        loader = typ.cast(FileSystemLoader, env.loader)
+        self.raw_template, self.template_path, _ = loader.get_source(
+            env, f"{prompt_name}.yml.j2"
+        )
+        self.prompt_name = prompt_name
+        self.seed = seed
+        self.sampling_params = sampling_params
+
+    def format_request(self, **kwargs) -> dict[str, typ.Any]:
+        """Format the prompt."""
+        prompt_template = Prompt(
+            raw_template=self.raw_template,
+            template_data={"custom_tojson": custom_tojson, **kwargs},
+        )
+        prompt = self.prompt_messages_or_string(self.client, prompt_template)
+        return {
+            "prompt": prompt if self.client.endpoint == "completions" else None,
+            "messages": prompt if self.client.endpoint == "chat/completions" else None,
+            "seed": self.seed,
+            "max_tokens": 5000,
+            **self.sampling_params,
+        }
+
+    @staticmethod
+    def prompt_messages_or_string(
+        client: ModelInterface, prompt: Prompt
+    ) -> str | list[dict[str, str]]:
+        if client.endpoint == "chat/completions":
+            return prompt.messages
+        return prompt.string
+
+    def __call__(
+        self, batch: dict[str, list[typ.Any]], *args, **kwargs
+    ) -> dict[str, list[typ.Any]]:
+        """Process a row of agent tasks from a HuggingFace datasets.map()."""
+        batch_size = len(batch[list(batch.keys())[0]])
+
+        batch_rows = [
+            self._format_input({key: value[i] for key, value in batch.items()})
+            for i in range(batch_size)
+        ]
+
+        responses = asyncio.run(self._async_call_wrapper(batch_rows))
+
+        output = defaultdict(list)
+        for i, r in enumerate(responses):
+            output_data = r.model_dump()
+            for key, value in output_data.items():
+                output[key].append(value)
+
+        return {
+            **batch,
+            **output,
+        }
+
+    async def _async_call_wrapper(
+        self, batch_rows: list[InputModel]
+    ) -> list[OutputModel]:
+        """Handle a batch of alignment tasks."""
+        return await asyncio.gather(*[self.predict(row) for row in batch_rows])
 
     @abstractmethod
-    async def predict(self, *args, **kwargs) -> Alignment: ...
+    def _format_input(self, row: dict[str, typ.Any]) -> InputModel:
+        """Format the input."""
+        ...
+
+    @abstractmethod
+    async def predict(self, *args, **kwargs) -> OutputModel:
+        """Handle a batch of agent tasks."""
+        ...

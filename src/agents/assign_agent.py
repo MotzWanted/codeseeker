@@ -1,162 +1,168 @@
-from abc import abstractmethod
-import asyncio
-from collections import defaultdict
 from functools import partial
+import json
 import re
 import typing as typ
 from loguru import logger
 
-from prompt_poet import Prompt
-from jinja2 import Environment, FileSystemLoader
+import numpy as np
 import pydantic
-from throughster.base import ModelInterface
 from throughster.core.models import ResponseChoice, BaseResponse
-from throughster.hf_datasets import HfOperation
 
-from agents.base import PATH_TO_TEMPLATES, custom_tojson
-from trie.base import Trie
+from agents.base import HfBaseAgent
+from dataloader.adapt.base import BaseModel
+from dataloader.constants import PROJECT_ROOT
 from trie import models
+
+ANSWER_PATTERN = r"<answer>.*?(\b[1-9]\d{0,3}(?:\s*,\s*[1-9]\d{0,3})*\b).*?<\/answer>"
 
 
 class InputModel(pydantic.BaseModel):
     """Input model for the Locate Agent."""
 
     note: str
-    codes: list[models.CmCode]
-    instructional_notes: list[models.CmCode]
+    codes: list[models.Code]
+    instructional_notes: list[models.Code]
 
 
 class OutputModel(pydantic.BaseModel):
     """Output model for the Locate Agent."""
 
-    codes: list[models.CmCode]
+    codes: list[str]
+    predictions: list[str]
     response: str | None = None
 
-
-class HfLocateAgent(HfOperation):
-    def __init__(self, trie: Trie, init_client_fn: typ.Callable[..., ModelInterface]):
-        self.trie: Trie = trie
-        self.init_client_fn = init_client_fn
-
-    def __call__(self, batch: dict[str, list[typ.Any]], *args, **kwargs) -> dict[str, list[typ.Any]]:
-        """Process a row of alignment tasks from a HuggingFace datasets.map()."""
-        batch_size = len(batch[list(batch.keys())[0]])
-
-        main_terms = self.trie.get_all_main_terms()
-        batch_rows = [{key: value[i] for key, value in batch.items()} for i in range(batch_size)]
-        batch_rows = [self._format_input({**row, "terms": main_terms}) for row in batch_rows]
-
-        responses = asyncio.run(*[self.predict(row) for row in batch_rows])
-
-        batch = {key: [row[key] for row in batch_rows] for key in batch_rows[0].keys()}
-
-        output = defaultdict(list)
-        for i, r in enumerate(responses):
-            alignment_data = r.model_dump()
-            for key, value in alignment_data.items():
-                output[key].append(value)
-
-        return {
-            **batch,
-            **output,
-        }
-
-    @staticmethod
-    def _format_input(rows: dict[str, typ.Any]) -> dict[str, typ.Any]:
-        """Format the targets."""
-        return InputModel(**rows)
-
-    @abstractmethod
-    async def predict(self, inputs: list[InputModel]) -> list[OutputModel]:
-        """Handle a batch of alignment tasks."""
-        NotImplementedError
+    @pydantic.field_validator("predictions")
+    def check_predictions(cls, v: list[str]) -> list[str]:
+        """Check the predictions."""
+        if not v:
+            return ["None"]
+        return v
 
 
-class LLMLocateAgent(HfLocateAgent):
-    def __init__(self, prompt_name: str, seed: int, sampling_params: dict[str, typ.Any], *args, **kwargs):
-        env = Environment(loader=FileSystemLoader(PATH_TO_TEMPLATES), autoescape=False)
-        loader = typ.cast(FileSystemLoader, env.loader)
-        self.raw_template, self.template_path, _ = loader.get_source(env, f"{prompt_name}.yml.j2")
-        self.prompt_name = prompt_name
-        self.seed = seed
-        self.sampling_params = sampling_params
+class MockAssignAgent(HfBaseAgent):
+    """A dummy assign agent that simulates the candidate space"""
+
+    def __init__(
+        self,
+        n_samples: int,
+        per_code: bool = True,
+        path_to_negatives: str = "data/medical-coding-systems/negatives/icd10cm_tabular_2022_negatives.json",
+        *args,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
+        with (PROJECT_ROOT / path_to_negatives).open() as f:
+            negatives_data = json.load(f)
+        self.negatives: dict[str, list] = negatives_data
+        self.n_samples = n_samples
+        self.per_code = per_code
+        self.rng = np.random.RandomState(self.seed)
 
-    async def predict(self, input: InputModel) -> OutputModel:
+    async def _warmup(self, row: InputModel) -> None:
+        """Warm up the model with a dummy request."""
+        request = self.format_request(**row.model_dump())
+        request["max_tokens"] = 1
+        await self.client.call(request=request)
+
+    async def predict(self, inputs: list[InputModel]) -> OutputModel:
         """Handle a batch of alignment tasks."""
-        request = self.format_request(**input.model_dump())
-        resp: BaseResponse = await self.client.call(request=request)
+        if len(inputs) > 1:
+            await self._warmup(inputs[0])
+        requests = [self.format_request(**el.model_dump()) for el in inputs]
+        responses: list[BaseResponse] = await self.client.batch_call(requests=requests)
+        response = ""
+        predictions = set()
 
-        preds, response = self.compress_choices(resp.choices)
-        predicted_terms = [input.terms[i - 1] for i in preds]
-        term_codes = set()
-        for term in predicted_terms:
-            term_codes.update(self.trie.get_all_term_codes(term.id))
+        for idx, resp in enumerate(responses):
+            pred, reasoning = self.compress_choices(resp.choices)
+            predictions.update([inputs[idx].codes[i - 1].name for i in pred])
+            response += reasoning + "\n\n"
 
         return OutputModel(
-            terms=predicted_terms,
-            codes=[self.trie.tabular[self.lookup[c]] for c in term_codes],
-            evidence=None,
-            response=response,
+            codes=[code.name for sublist in inputs for code in sublist.codes],
+            predictions=list(predictions),
+            response=response.strip(),
         )
 
-    def format_request(self, **kwargs) -> Prompt:
-        """Format the prompt."""
-        prompt_template = Prompt(
-            raw_template=self.raw_template,
-            template_data={"custom_tojson": custom_tojson, **kwargs},
-        )
-        prompt = self.prompt_messages_or_string(self.client, prompt_template)
-        return {
-            "prompt": prompt if self.client.endpoint == "completions" else None,
-            "messages": prompt if self.client.endpoint == "chat/completions" else None,
-            "seed": self.seed,
-            "max_tokens": 5000,
-            **self.sampling_params,
-        }
+    def _sample_negatives(self, code_id: str) -> list[str]:
+        """Sample negatives for a given code."""
+        population = self.negatives[code_id]
+        weights = np.exp(-0.5 * np.arange(len(population)))  # Exponential decay
+        weights /= weights.sum()
+        return self.rng.choice(
+            population, size=self.n_samples, replace=False, p=weights
+        ).tolist()
 
-    @staticmethod
-    def prompt_messages_or_string(client: ModelInterface, prompt: Prompt) -> str | list[dict[str, str]]:
-        if client.endpoint == "chat/completions":
-            return prompt.messages
-        return prompt.string
+    def _format_input(self, row: dict[str, typ.Any]) -> list[InputModel]:
+        """Format the input."""
+        m = BaseModel(**row)
+
+        negative_ids: list[list[str]] = [
+            self._sample_negatives(code) for code in m.targets
+        ]
+        positives: list[models.Code] = [
+            self.trie.tabular[self.trie.lookup[code]] for code in m.targets
+        ]
+        negatives: list[list[models.Code]] = [
+            [self.trie.tabular[self.trie.lookup[code]] for code in codes]
+            for codes in negative_ids
+        ]
+        if self.per_code:
+            codes = [
+                sorted([pos] + negs, key=lambda c: c.name)
+                for pos, negs in zip(positives, negatives)
+            ]
+            return [
+                InputModel(note=m.note, codes=sublist, instructional_notes=sublist)
+                for sublist in codes
+            ]
+        else:
+            codes = sorted(
+                [code for sublist in negatives for code in sublist] + positives,
+                key=lambda c: c.name,
+            )
+            return [InputModel(note=m.note, codes=codes, instructional_notes=codes)]
 
     def compress_choices(self, choices: list[ResponseChoice]) -> tuple[list[int], str]:
         """Compress the choices."""
         c = choices[0]
-        answer_match = re.search(self.ANSWER_PATTERN, c.content)
-        preds = [int(num.strip()) for num in answer_match.group(1).split(",")] if answer_match else []
+        answer_match = re.search(ANSWER_PATTERN, c.content)
+        preds = (
+            [int(num.strip()) for num in answer_match.group(1).split(",")]
+            if answer_match
+            else []
+        )
         if not preds:
-            logger.warning(f"Could not find any relevant tokens in the response: {c.content[-250:]}")
+            logger.warning(
+                f"Could not find any relevant tokens in the response: {c.content[-250:]}"
+            )
         return preds, c.content
 
 
-def create_locate_agent(
+def create_assign_agent(
     agent_type: str,
     prompt_name: str,
     sampling_params: dict[str, typ.Any],
     seed: int = 42,
-) -> HfLocateAgent:
+) -> typ.Callable[..., HfBaseAgent]:
     """
-    Factory method to create an LLMAligner instance based on the specified type.
-
-    Args:
-        aligner_type (str): The type of aligner to create ("binary" or "long_context").
-        prompt_name (str): The name of the prompt template to use.
-        num_shots (int): Number of few-shot examples.
-        token_limit (int): Token limit for the prompts.
-        seed (int): Seed for random operations.
-        sampling_params (dict[str, Any]): Sampling parameters for the LLM.
-
-    Returns:
-        LLMAligner: An instance of either BinaryLLMAligner or LongContextLLMAligner.
+    Factory method to create an AssignAgent instance based on the specified type.
     """
-    if agent_type == "long-context":
+    if agent_type == "mock-per-code":
         return partial(
-            LLMLocateAgent,
+            MockAssignAgent,
             prompt_name=prompt_name,
             seed=seed,
             sampling_params=sampling_params,
+            per_code=True,
+        )
+    elif agent_type == "mock":
+        return partial(
+            MockAssignAgent,
+            prompt_name=prompt_name,
+            seed=seed,
+            sampling_params=sampling_params,
+            per_code=False,
         )
     else:
         raise ValueError(f"Unsupported agent type: {agent_type}")

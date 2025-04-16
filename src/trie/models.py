@@ -10,10 +10,12 @@ class Root(pydantic.BaseModel):
     min: str
     max: str
     assignable: bool = False
-    parent_id: str = ""
+    parent_id: str = pydantic.Field(default="")
     children_ids: list[str] = pydantic.Field(default_factory=list)
 
-    model_config = SettingsConfigDict(frozen=True, arbitrary_types_allowed=True, extra="ignore")
+    model_config = SettingsConfigDict(
+        frozen=True, arbitrary_types_allowed=True, extra="ignore"
+    )
 
 
 class Category(Root):
@@ -22,8 +24,8 @@ class Category(Root):
     min: str
     max: str
     description: str
-    parent_id: str
-    children_ids: str | None = pydantic.Field(default_factory=list)
+    parent_id: str  # type: ignore
+    children_ids: list[str] = pydantic.Field(default_factory=list)
     assignable: bool = False
 
     def __repr__(self) -> str:
@@ -34,29 +36,9 @@ class Category(Root):
 
 
 class Code(Category):
-    assignable: bool
+    assignable: bool = True
     min: str = ""
     max: str = ""
-
-    def within(self, code: str) -> bool:
-        raise NotImplementedError("Method not implemented")
-
-    def full_desc(self, nodes: dict[str, "Code"]) -> str:
-        if self.parent_id:
-            parent = nodes[self.parent_id]
-            return f"{parent.full_desc(nodes)} {self.description}".strip()
-        else:
-            return self.description
-
-    def list_desc(self, nodes: dict[str, "Code"]) -> list[str]:
-        if self.parent_id:
-            parent = nodes[self.parent_id]
-            return parent.list_desc(nodes) + [self.description]
-        else:
-            return []
-
-    def is_leaf(self) -> bool:
-        return not self.children_ids
 
     def __repr__(self) -> str:
         return f"{self.name} {self.description}"
@@ -100,19 +82,25 @@ class ICDFileMap(pydantic.BaseModel):
     cm_guidelines: pydantic.FilePath | None = pydantic.Field(
         default=None, description="Optional path to the CM guidelines PDF"
     )
-    pcs_tabular: pydantic.FilePath = pydantic.Field(..., description="Path to the PCS tabular XML file")
+    pcs_tabular: pydantic.FilePath = pydantic.Field(
+        ..., description="Path to the PCS tabular XML file"
+    )
     pcs_index: pydantic.FilePath | None = pydantic.Field(
         default=None, description="Optional path to the PCS alphabetic index XML file"
     )
-    cm_tabular: pydantic.FilePath = pydantic.Field(..., description="Path to the CM tabular XML file")
+    cm_tabular: pydantic.FilePath = pydantic.Field(
+        ..., description="Path to the CM tabular XML file"
+    )
     cm_neoplasm_index: pydantic.FilePath | None = pydantic.Field(
         default=None, description="Optional path to the CM neoplasm index XML file"
     )
     cm_disease_injuries_index: pydantic.FilePath | None = pydantic.Field(
-        default=None, description="Optional path to the CM disease and injuries index XML file"
+        default=None,
+        description="Optional path to the CM disease and injuries index XML file",
     )
     cm_external_cause_index: pydantic.FilePath | None = pydantic.Field(
-        default=None, description="Optional path to the CM external cause index XML file"
+        default=None,
+        description="Optional path to the CM external cause index XML file",
     )
     cm_drug_index: pydantic.FilePath | None = pydantic.Field(
         default=None, description="Optional path to the CM drug index XML file"
@@ -131,7 +119,10 @@ class ICDFileMap(pydantic.BaseModel):
                 f"Multiple files match the pattern '{file_pattern}'. Please specify a more specific pattern."
             )
 
-        expected_files = {k: _get_best_match(directory, file_pattern=pattern) for k, pattern in cls.EXPECTED_FILES}
+        expected_files = {
+            k: _get_best_match(directory, file_pattern=pattern)
+            for k, pattern in cls.EXPECTED_FILES
+        }
 
         missing = [k for k, v in expected_files.items() if not v]
         if missing:
@@ -139,10 +130,15 @@ class ICDFileMap(pydantic.BaseModel):
                 f"Missing files. Check the download directory at {directory}. Missing: {', '.join(missing)}"
             )
 
-        return cls(**expected_files)
+        return cls(**expected_files)  # type: ignore
 
 
-ICDCM_INDEX = ["cm_neoplasm_index", "cm_disease_injuries_index", "cm_external_cause_index", "cm_drug_index"]
+ICDCM_INDEX = [
+    "cm_neoplasm_index",
+    "cm_disease_injuries_index",
+    "cm_external_cause_index",
+    "cm_drug_index",
+]
 
 
 class PcsCategory(Category):
@@ -199,22 +195,14 @@ class PcsTable(pydantic.BaseModel):
     rows: list[PcsRow]
 
 
-class CmChapter(Category):
-    """CM Chapter."""
-
-    _type: str = "cm"
-    assignable: bool = False
-    notes: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    includes: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    use_additional_code: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    excludes1: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    excludes2: list[str] | None = pydantic.Field(default_factory=lambda: [])
-
-
-class CmCategory(CmChapter):
+class CmCategory(Category):
     """CM Section."""
 
     assignable: bool = False
+    notes: list[str] | None = pydantic.Field(default_factory=lambda: [])
+    includes: list[str] | None = pydantic.Field(default_factory=lambda: [])
+    excludes1: list[str] | None = pydantic.Field(default_factory=lambda: [])
+    excludes2: list[str] | None = pydantic.Field(default_factory=lambda: [])
     inclusion_term: list[str] | None = pydantic.Field(default_factory=lambda: [])
     excludes1: list[str] | None = pydantic.Field(default_factory=lambda: [])
     excludes2: list[str] | None = pydantic.Field(default_factory=lambda: [])
@@ -224,7 +212,7 @@ class CmCategory(CmChapter):
 class CmCode(CmCategory, Code):
     """CM code."""
 
-    assignable: bool
+    assignable: bool = True
     code_first: list[str] | None = pydantic.Field(default_factory=lambda: [])
     code_also: list[str] | None = pydantic.Field(default_factory=lambda: [])
     etiology: bool = False
