@@ -51,7 +51,7 @@ def main(args: Arguments):
         f"http://{args.embedding_host}:{args.embedding_port}/v1/", args.embedding_model
     )
 
-    xml_trie = ICD10Trie.from_cms(year=2018)
+    xml_trie = ICD10Trie.from_cms(year=2022)
     xml_trie.parse()
     mdace_config: DatasetConfig = DatasetConfig(
         **dataloader.DATASET_CONFIGS["mdace-icd10cm"]
@@ -62,10 +62,23 @@ def main(args: Arguments):
     unique_codes: set[str] = set()
     for codes in mdace["targets"]:
         unique_codes.update(codes)
+    mdace = mdace.map(
+        lambda row: {
+            **row,
+            "targets": [code for code in row["targets"] if code in xml_trie.lookup],
+        }
+    )
+
+    filtered_codes: set[str] = set()
+    for codes in mdace["targets"]:
+        filtered_codes.update(codes)
+
+    # print difference between unique_codes and filtered_codes
+    print("Number of filtered codes:", len(unique_codes - filtered_codes))
 
     cm_codes = xml_trie.get_root_leaves(root="cm")
     unique_cm_codes = set(code.name for code in cm_codes)
-    codes = list(unique_codes | unique_cm_codes)
+    codes = list(filtered_codes | unique_cm_codes)
     descriptions = [xml_trie[code].description for code in codes]
 
     dataset = datasets.Dataset.from_dict({"codes": codes, "descriptions": descriptions})

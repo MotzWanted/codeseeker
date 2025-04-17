@@ -44,6 +44,34 @@ class Code(Category):
         return f"{self.name} {self.description}"
 
 
+class InstructionalNote(pydantic.BaseModel):
+    """Represents an instructional note inspired by the ICD10CM"""
+
+    name: str
+    assignable: bool
+    notes: list[str] | None = None
+    includes: list[str] | None = None
+    inclusion_term: list[str] | None = None
+    excludes1: list[str] | None = None
+    excludes2: list[str] | None = None
+    use_additional_code: list[str] | None = None
+    code_first: list[str] | None = None
+    code_also: list[str] | None = None
+
+    def is_empty(self) -> bool:
+        """Check if the instructional note is empty."""
+        return (
+            not self.notes
+            and not self.includes
+            and not self.inclusion_term
+            and not self.excludes1
+            and not self.excludes2
+            and not self.use_additional_code
+            and not self.code_first
+            and not self.code_also
+        )
+
+
 class Term(pydantic.BaseModel):
     """Represents a term in an alphabetic index."""
 
@@ -59,8 +87,8 @@ class Term(pydantic.BaseModel):
 
 class ICDFileMap(pydantic.BaseModel):
     EXPECTED_FILES: typing.ClassVar[list[tuple[str, str]]] = [
-        ("pcs_guidelines", "*icd-10-pcs*guidelines*.pdf"),
-        ("cm_guidelines", "*icd-10-cm*guidelines*.pdf"),
+        ("pcs_guidelines", "*pcs*guidelines*.pdf"),
+        ("cm_guidelines", "*cm*guidelines*.pdf"),
         ("pcs_tabular", "*icd10pcs_tables*.xml"),
         ("pcs_index", "*icd10pcs_index*.xml"),
         ("cm_tabular", "icd10cm_tabular*.xml"),
@@ -82,8 +110,8 @@ class ICDFileMap(pydantic.BaseModel):
     cm_guidelines: pydantic.FilePath | None = pydantic.Field(
         default=None, description="Optional path to the CM guidelines PDF"
     )
-    pcs_tabular: pydantic.FilePath = pydantic.Field(
-        ..., description="Path to the PCS tabular XML file"
+    pcs_tabular: pydantic.FilePath | None = pydantic.Field(
+        None, description="Path to the PCS tabular XML file"
     )
     pcs_index: pydantic.FilePath | None = pydantic.Field(
         default=None, description="Optional path to the PCS alphabetic index XML file"
@@ -114,7 +142,9 @@ class ICDFileMap(pydantic.BaseModel):
             if not matches:
                 return None
             if len(matches) == 1:
+                # return the file name with year match
                 return matches[0]
+            return matches[0]
             raise ValueError(
                 f"Multiple files match the pattern '{file_pattern}'. Please specify a more specific pattern."
             )
@@ -195,38 +225,24 @@ class PcsTable(pydantic.BaseModel):
     rows: list[PcsRow]
 
 
-class CmCategory(Category):
+class CmCategory(Category, InstructionalNote):
     """CM Section."""
-
-    assignable: bool = False
-    notes: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    includes: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    excludes1: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    excludes2: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    inclusion_term: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    excludes1: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    excludes2: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    use_additional_code: list[str] | None = pydantic.Field(default_factory=lambda: [])
 
 
 class CmCode(CmCategory, Code):
     """CM code."""
 
     assignable: bool = True
-    code_first: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    code_also: list[str] | None = pydantic.Field(default_factory=lambda: [])
-    etiology: bool = False
-    manifestation: bool = False
     min: str = ""
     max: str = ""
+    etiology: bool
+    manifestation: bool
 
 
 SeventhCharacter = namedtuple("SeventhCharacter", ["character", "name", "parent_name"])
 
 
-class CmDiag(pydantic.BaseModel):
-    name: str
-    desc: str
+class CmElement(pydantic.BaseModel):
     notes: list[str] = []
     includes: list[str] = []
     inclusion_term: list[str] = []
@@ -235,6 +251,11 @@ class CmDiag(pydantic.BaseModel):
     excludes1: list[str] = []
     excludes2: list[str] = []
     use_additional_code: list[str] = []
+
+
+class CmDiag(CmElement):
+    name: str
+    desc: str
     seventh_characters: list[SeventhCharacter] = []
     children: list["CmDiag"] = []
 
@@ -251,7 +272,7 @@ class CmDiag(pydantic.BaseModel):
         return bool(self.use_additional_code)
 
 
-class CmSection(pydantic.BaseModel):
+class CmSection(CmElement):
     section_id: str
     description: str
     diags: list[CmDiag] = []
@@ -265,7 +286,7 @@ class CmSection(pydantic.BaseModel):
         return self
 
 
-class CmChapter(pydantic.BaseModel):
+class CmChapter(CmElement):
     chapter_id: str
     chapter_desc: str
     sections: list[CmSection] = []

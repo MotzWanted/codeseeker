@@ -112,7 +112,7 @@ class HfBaseAgent(HfOperation, typ.Generic[InputModel, OutputModel]):
         """Process a row of agent tasks from a HuggingFace datasets.map()."""
         batch_size = len(batch[list(batch.keys())[0]])
 
-        batch_rows = [
+        batch_rows: list[InputModel] = [
             self._format_input({key: value[i] for key, value in batch.items()})
             for i in range(batch_size)
         ]

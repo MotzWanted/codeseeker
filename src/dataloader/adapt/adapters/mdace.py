@@ -2,7 +2,7 @@ import typing as typ
 import pydantic
 
 
-from dataloader.adapt.adapters.mimic import MimicAdapter, sample_from_nested_list
+from dataloader.adapt.adapters.mimic import MimicAdapter, sample_negatives
 from dataloader.adapt.base import BaseModel
 from dataloader.base import DatasetOptions
 from dataloader.constants import PROJECT_ROOT
@@ -47,10 +47,14 @@ class MdaceAdapter(MimicAdapter):
     output_model: typ.Type[BaseModel] = BaseModel
 
     @classmethod
-    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseModel:
+    def translate_row(
+        cls, row: dict[str, typ.Any], options: DatasetOptions
+    ) -> BaseModel:
         """Adapt a row."""
 
-        def _format_row(row: dict[str, typ.Any], options: DatasetOptions) -> dict[str, typ.Any]:
+        def _format_row(
+            row: dict[str, typ.Any], options: DatasetOptions
+        ) -> dict[str, typ.Any]:
             struct_row = cls.input_model(**row)
             targets = []
             for code in struct_row.annotations.code:
@@ -73,20 +77,26 @@ class MdaceLegacyAdapter(MdaceAdapter):
     output_model: typ.Type[BaseModel] = BaseModel
 
     @classmethod
-    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseModel:
+    def translate_row(
+        cls, row: dict[str, typ.Any], options: DatasetOptions
+    ) -> BaseModel:
         """Adapt a row."""
 
-        def _format_row(row: dict[str, typ.Any], options: DatasetOptions) -> dict[str, typ.Any]:
+        def _format_row(
+            row: dict[str, typ.Any], options: DatasetOptions
+        ) -> dict[str, typ.Any]:
             cm_trie = cls().cm_trie
             pcs_trie = cls().pcs_trie
             negatives_data = cls().negatives
             struct_row = cls.input_model(**row)
             positives = list(set(code for code in struct_row.annotations.code))
-            negatives: list[list[str]] = [negatives_data[code] for code in positives if code in negatives_data]
-            sampled_negatives = sample_from_nested_list(
+            negatives: list[list[str]] = [
+                negatives_data[code] for code in positives if code in negatives_data
+            ]
+            sampled_negatives = sample_negatives(
                 negatives,
                 positives=positives,
-                negatives=options.negatives,
+                per_positive=options.negatives,
                 seed=options.seed,
             )
             classes = get_code_objects(

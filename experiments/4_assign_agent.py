@@ -2,7 +2,6 @@ from collections import OrderedDict
 import json
 import typing as typ
 
-import datasets
 import pydantic
 import rich
 from loguru import logger
@@ -19,23 +18,21 @@ class Arguments(cnf.BaseArguments):
     """Args for the script."""
 
     experiment_id: str = "assign-agent"
-    experiment_name: str = "per-code"
+    experiment_name: str = "mock-negatives-single"
 
-    api_base: str = "http://localhost:6538/v1"
+    api_base: str = "http://localhost:6539/v1"
     deployment: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
     endpoint: typ.Literal["chat/completions", "completions"] = "completions"
 
     prompt_name: str = (
-        "assign_agent/per_code_v1:assign_agent/per_code_v2:assign_agent/per_code_v3"  # lookup in `src/alignment/templates`
+        "assign_agent/per_code_v1:assign_agent/per_code_v2:assign_agent/per_code_v3:assign_agent/per_code_v4"  # lookup in `src/alignment/templates`
     )
 
-    agent_type: str = "mock-per-code"
+    agent_type: str = "mock-single"
     temperature: float = 0.0
 
     dataset: str = "mdace-icd10cm"  # "mimic-iii-50" | "mimic-iv" | "mdace-icd10cm"
-    negatives: str = (
-        "1:2:5:10:20"  # number of negative samples to include in the prompt
-    )
+    negatives: str = "0:1:3:5"  # number of negative samples to include in the prompt
     seed: str = "1"  # e.g., "1:2:3:4:5"
     n_samples: int = 1
 
@@ -68,14 +65,12 @@ def run(args: Arguments):
             "load_from_cache_file": False,
             "num_proc": args.num_workers,
         }
+        dset = dataloader.load_dataset(dset_config)
+        dset = cnf.format_dataset(dset, xml_trie)
         logger.info(f"Running {dataset} with seeds `{args._seeds}`.")
         for prompt_name in args._prompts:  # type: ignore
             for num_negs in args._negatives:  # type: ignore
                 for seed in args._seeds:  # type: ignore
-                    dset_config.options.seed = seed
-                    dset = dataloader.load_dataset(dset_config)
-                    if isinstance(dset, datasets.DatasetDict):
-                        dset = datasets.concatenate_datasets(dset.values())  # type: ignore
                     logger.info(f"Predicting with {num_negs} negatives...")
                     agent = create_assign_agent(
                         agent_type=args.agent_type,
@@ -86,7 +81,6 @@ def run(args: Arguments):
                             "seed": seed,
                         },
                     )
-                    # dset = dset.select(range(0, 10))
                     task_maker = agent(
                         init_client_fn=cnf._init_client_fn(**args.model_dump()),
                         trie=xml_trie,

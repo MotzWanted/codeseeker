@@ -60,7 +60,9 @@ def load_pretrained_lm(
         try:
             import bitsandbytes as bnb  # type: ignore  # noqa: F401
         except ImportError as exc:
-            raise ImportError("Please install `pip install bitsandbytes scipy`") from exc
+            raise ImportError(
+                "Please install `pip install bitsandbytes scipy`"
+            ) from exc
 
         quant_config = transformers.BitsAndBytesConfig(
             load_in_4bit=True,
@@ -68,7 +70,9 @@ def load_pretrained_lm(
             bnb_4bit_quant_type=quantize,
             bnb_4bit_compute_dtype=_prec_to_dtype(precision),
         )
-        logger.info("Using quantization config: {quant_config}", quant_config=quant_config)
+        logger.info(
+            "Using quantization config: {quant_config}", quant_config=quant_config
+        )
     else:
         quant_config = None
 
@@ -131,7 +135,9 @@ def init_and_wrap_optimizer(
 
         optimizer = PagedAdamW(trainable_params, lr=lr, weight_decay=weight_decay)
     else:
-        optimizer = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay, foreach=False)  # <-- FSDP
+        optimizer = torch.optim.AdamW(
+            trainable_params, lr=lr, weight_decay=weight_decay, foreach=False
+        )  # <-- FSDP
     wrapped_optimizer: torch.optim.Optimizer = fabric.setup_optimizers(optimizer)  # type: ignore
 
     # Setup the scheduler
@@ -199,7 +205,10 @@ def save_pretrained_model(
         (output_path / "template.txt").write_text(template)
     (output_path / "args.json").write_text(json.dumps(args.model_dump()))
     if metrics is not None:
-        metrics = {k: v.mean().item() if isinstance(v, torch.Tensor) else v for k, v in metrics.items()}
+        metrics = {
+            k: v.mean().item() if isinstance(v, torch.Tensor) else v
+            for k, v in metrics.items()
+        }
         if step is not None:
             metrics["step"] = step
         (output_path / "metrics.json").write_text(json.dumps(metrics))
@@ -207,7 +216,9 @@ def save_pretrained_model(
 
 def is_global_zero() -> bool:
     """Check if the current process is the global zero."""
-    return (os.environ.get("NODE_RANK", "0") == "0") and (os.environ.get("LOCAL_RANK", "0") == "0")
+    return (os.environ.get("NODE_RANK", "0") == "0") and (
+        os.environ.get("LOCAL_RANK", "0") == "0"
+    )
 
 
 def unwrapped_model(model: T) -> T:
@@ -239,7 +250,9 @@ def _prec_to_dtype(x: str) -> torch.dtype:
     try:
         return _dtypes[x]
     except KeyError as exc:
-        raise RuntimeError(f"Unknown precision `{x}`. Choose from `{list(_dtypes.keys())}`.") from exc
+        raise RuntimeError(
+            f"Unknown precision `{x}`. Choose from `{list(_dtypes.keys())}`."
+        ) from exc
 
 
 def silent_loggers_on_slave_nodes(slave_level: str = "ERROR") -> None:
@@ -294,7 +307,9 @@ class SavePretrainedModelCallback(Callback):
         if len(matches) == 0:
             return None
         if len(matches) > 1:
-            raise RuntimeError(f"Found multiple matches for `{self.track_metric}`: {matches}")
+            raise RuntimeError(
+                f"Found multiple matches for `{self.track_metric}`: {matches}"
+            )
         return matches[0]
 
     def on_validation_end(
@@ -313,13 +328,19 @@ class SavePretrainedModelCallback(Callback):
             )
             return
         value = metrics[matched_metric]
-        if (self.track_mode == "min" and value < self.best) or (self.track_mode == "max" and value > self.best):
+        if (self.track_mode == "min" and value < self.best) or (
+            self.track_mode == "max" and value > self.best
+        ):
             self.best = value
             logger.info(
                 "Saving model at step {step} with {metric}={value} - path={output_path}",
                 step=step,
                 metric=self.track_metric,
-                value=value.mean().detach().cpu().item() if isinstance(value, torch.Tensor) else value,
+                value=(
+                    value.mean().detach().cpu().item()
+                    if isinstance(value, torch.Tensor)
+                    else value
+                ),
                 output_path=self.output_path.absolute(),
             )
             # Unwrap the model and save it
@@ -337,8 +358,13 @@ class SavePretrainedModelCallback(Callback):
 class PatternStoppingCriteria(generate_stops.StoppingCriteria):
     """Stopping criteria based on a list of `input_ids` patterns."""
 
-    def __init__(self, tokenizer: transformers.PreTrainedTokenizerBase, patterns: list[str]):
-        pattern_token_ids = [tokenizer.encode(p, add_special_tokens=False, return_tensors="pt") for p in patterns]
+    def __init__(
+        self, tokenizer: transformers.PreTrainedTokenizerBase, patterns: list[str]
+    ):
+        pattern_token_ids = [
+            tokenizer.encode(p, add_special_tokens=False, return_tensors="pt")
+            for p in patterns
+        ]
         self.pattern_token_ids: list[torch.LongTensor] = pattern_token_ids  # type: ignore
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs: typ.Any) -> bool:  # type: ignore
@@ -368,12 +394,18 @@ class TrieClassificationMonitor(Monitor):
         self.trie = trie
         self.class_aggregators = torch.nn.ModuleDict(
             {
-                **{k: ClassAggregator(self.num_classes) for k in ["tp", "fp", "fn", "tn"]},
+                **{
+                    k: ClassAggregator(self.num_classes)
+                    for k in ["tp", "fp", "fn", "tn"]
+                },
             }
         )
         self.aggregators = torch.nn.ModuleDict(
             {
-                **{k: ClassAggregator(self.num_classes) for k in ["tp", "fp", "fn", "tn"]},
+                **{
+                    k: ClassAggregator(self.num_classes)
+                    for k in ["tp", "fp", "fn", "tn"]
+                },
                 **{k: MeanAggregator() for k in [*self.keys, "_hit", "pos_ratio"]},
             }
         )
@@ -387,19 +419,29 @@ class TrieClassificationMonitor(Monitor):
         # Micro F1
         micro_precision = tp.sum() / (tp.sum() + fp.sum() + 1e-10)
         micro_recall = tp.sum() / (tp.sum() + fn.sum() + 1e-10)
-        output["f1_micro"] = 2 * (micro_precision * micro_recall) / (micro_precision + micro_recall + 1e-10)
+        output["f1_micro"] = (
+            2
+            * (micro_precision * micro_recall)
+            / (micro_precision + micro_recall + 1e-10)
+        )
 
         # Macro F1 (ignoring TN-only classes)
         precision_per_class = tp / (tp + fp + 1e-10)
         recall_per_class = tp / (tp + fn + 1e-10)
-        f1_per_class = 2 * (precision_per_class * recall_per_class) / (precision_per_class + recall_per_class + 1e-10)
+        f1_per_class = (
+            2
+            * (precision_per_class * recall_per_class)
+            / (precision_per_class + recall_per_class + 1e-10)
+        )
 
         # Exclude classes where TP + FP + FN = 0 (TN-only classes)
         valid_classes = (tp + fp + fn) > 0
         if valid_classes.any():  # Ensure there are valid classes
             macro_f1 = f1_per_class[valid_classes].mean()
         else:
-            macro_f1 = torch.tensor(0.0)  # Handle edge case where no valid classes exist
+            macro_f1 = torch.tensor(
+                0.0
+            )  # Handle edge case where no valid classes exist
 
         output["f1_macro"] = macro_f1
 
@@ -426,7 +468,9 @@ class TrieClassificationMonitor(Monitor):
         if target_input_ids is None or preds_input_ids is None:
             return
 
-        if isinstance(target_input_ids, torch.Tensor) and isinstance(preds_input_ids, torch.Tensor):
+        if isinstance(target_input_ids, torch.Tensor) and isinstance(
+            preds_input_ids, torch.Tensor
+        ):
             target_tokens = self._tokenize_fn(self.tokenizer, target_input_ids)
             preds_tokens = self._tokenize_fn(self.tokenizer, preds_input_ids)
             preds_input_ids = self._parse_tokens_fn(preds_tokens)
@@ -434,12 +478,22 @@ class TrieClassificationMonitor(Monitor):
 
         mapped_predictions = []
         mapped_targets = []
-        for targets, predictions, classes in zip(target_input_ids, preds_input_ids, list_of_classes):
-            mapped_predictions.append([self.trie[classes[idx - 1]["name"]] for idx in predictions])
-            mapped_targets.append([self.trie[classes[idx - 1]["name"]] for idx in targets])
+        for targets, predictions, classes in zip(
+            target_input_ids, preds_input_ids, list_of_classes
+        ):
+            mapped_predictions.append(
+                [self.trie[classes[idx - 1]["name"]] for idx in predictions]
+            )
+            mapped_targets.append(
+                [self.trie[classes[idx - 1]["name"]] for idx in targets]
+            )
 
-        prediction_matrix = list2tensor_vectorized(len(preds_input_ids), self.num_classes, mapped_predictions)
-        target_matrix = list2tensor_vectorized(len(target_input_ids), self.num_classes, mapped_targets)
+        prediction_matrix = list2tensor_vectorized(
+            len(preds_input_ids), self.num_classes, mapped_predictions
+        )
+        target_matrix = list2tensor_vectorized(
+            len(target_input_ids), self.num_classes, mapped_targets
+        )
 
         # Compute the true/false negatives/positives
         conf_matrix = self._make_conf_matrix(target_matrix, prediction_matrix)
@@ -447,7 +501,9 @@ class TrieClassificationMonitor(Monitor):
             self.aggregators[k].update(v)
 
     @staticmethod
-    def _tokenize_fn(tokenizer: transformers.PreTrainedTokenizerBase, input_ids: torch.Tensor) -> list[str]:
+    def _tokenize_fn(
+        tokenizer: transformers.PreTrainedTokenizerBase, input_ids: torch.Tensor
+    ) -> list[str]:
         """Tokenize the input."""
         return tokenizer.batch_decode(input_ids, skip_special_tokens=True)
 
@@ -457,12 +513,18 @@ class TrieClassificationMonitor(Monitor):
 
         def _parse_one_element(input_string: str) -> set[int]:
             """Parse a single element."""
-            return {int(num.strip()) for num in input_string.split(",") if num.strip().isdigit()}
+            return {
+                int(num.strip())
+                for num in input_string.split(",")
+                if num.strip().isdigit()
+            }
 
         return [_parse_one_element(x) for x in tokens]
 
     @staticmethod
-    def _make_conf_matrix(targets: torch.Tensor, preds: torch.Tensor) -> dict[str, torch.Tensor]:
+    def _make_conf_matrix(
+        targets: torch.Tensor, preds: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
         """Compute the true/false positives."""
         _targets = targets.bool()
         _preds = preds.bool()
@@ -472,12 +534,19 @@ class TrieClassificationMonitor(Monitor):
             "fp": (_preds & ~_targets).sum(dim=0),
             "fn": (_targets & ~_preds).sum(dim=0),
             "tn": (~_targets & ~_preds).sum(dim=0),
-            "_hit": (~(_targets ^ _preds)).all(dim=1).float(),  # counting row wise exact matches
+            "_hit": (~(_targets ^ _preds))
+            .all(dim=1)
+            .float(),  # counting row wise exact matches
             "pos_ratio": preds.sum() / targets.sum(),
         }
 
     def _make_table_date(
-        self, f1_macro: torch.Tensor, tp: torch.Tensor, fp: torch.Tensor, fn: torch.Tensor, tn: torch.Tensor
+        self,
+        f1_macro: torch.Tensor,
+        tp: torch.Tensor,
+        fp: torch.Tensor,
+        fn: torch.Tensor,
+        tn: torch.Tensor,
     ) -> dict[str, list[int | float]]:
         """Create a table with the metrics.
         Table should have columns for various classification metrics."""
@@ -512,11 +581,15 @@ class SafeTokenize:
         self.truncation = truncation
         self.kwargs = kwargs
         if return_tensors != "pt":
-            raise RuntimeError(f"Can only handle `return_tensors='pt'` but got `{return_tensors}`.")
+            raise RuntimeError(
+                f"Can only handle `return_tensors='pt'` but got `{return_tensors}`."
+            )
         self.return_tensors = return_tensors
         self.strict = strict
 
-    def __call__(self, *args: typ.Any, truncation: None | bool = None, **kwargs: typ.Any) -> dict[str, torch.Tensor]:
+    def __call__(
+        self, *args: typ.Any, truncation: None | bool = None, **kwargs: typ.Any
+    ) -> dict[str, torch.Tensor]:
         """Tokenize the inputs."""
         kws = {**self.kwargs, **kwargs}
         truncation = truncation or self.truncation
@@ -537,11 +610,19 @@ class SafeTokenize:
 
         if truncation:
             if self.tokenizer.padding_side == "left":
-                outputs = {k: v[:, -self.tokenizer.model_max_length :] for k, v in outputs.items()}
+                outputs = {
+                    k: v[:, -self.tokenizer.model_max_length :]
+                    for k, v in outputs.items()
+                }
             elif self.tokenizer.padding_side == "right":
-                outputs = {k: v[:, : self.tokenizer.model_max_length] for k, v in outputs.items()}
+                outputs = {
+                    k: v[:, : self.tokenizer.model_max_length]
+                    for k, v in outputs.items()
+                }
             else:
-                raise RuntimeError(f"Unknown padding side `{self.tokenizer.padding_side}`.")
+                raise RuntimeError(
+                    f"Unknown padding side `{self.tokenizer.padding_side}`."
+                )
         return outputs
 
 
@@ -554,7 +635,9 @@ def merge_lora(model: transformers.PreTrainedModel) -> transformers.PreTrainedMo
     return model
 
 
-def merge_and_unload_lora(model: transformers.PreTrainedModel) -> transformers.PreTrainedModel:
+def merge_and_unload_lora(
+    model: transformers.PreTrainedModel,
+) -> transformers.PreTrainedModel:
     """Merge LoRA adapters and get rif of the LoRA weights."""
     for module in model.modules():
         if isinstance(module, lora.LoraLayer):
@@ -624,14 +707,18 @@ def maybe_wrap_logits_processor(
     return transformers.LogitsProcessorList([processor_fn(tokenizer=_tokenizer)])
 
 
-def list2tensor_vectorized(dim_x: int, dim_y: int, indices: list[set[int | float]]) -> torch.Tensor:
+def list2tensor_vectorized(
+    dim_x: int, dim_y: int, indices: list[set[int | float]]
+) -> torch.Tensor:
     """Convert a list of indices to a sparse tensor."""
     row_indices = []
     col_indices = []
     values = []
 
     for i, preds in enumerate(indices):
-        preds = torch.tensor(list(preds), dtype=torch.float32)  # Convert the set to a PyTorch tensor
+        preds = torch.tensor(
+            list(preds), dtype=torch.float32
+        )  # Convert the set to a PyTorch tensor
         pred_signs = torch.where(preds < 0, -1, 1)  # Determine the sign
         pred_indices = torch.abs(preds) - 1  # Get absolute indices (0-based)
 
@@ -639,7 +726,9 @@ def list2tensor_vectorized(dim_x: int, dim_y: int, indices: list[set[int | float
         valid_mask = (pred_indices >= 0) & (pred_indices < dim_y)
         valid_count = int(valid_mask.sum().item())  # Explicitly convert to Python int
         row_indices.extend([i] * valid_count)  # Repeat row index for valid preds
-        col_indices.extend(pred_indices[valid_mask].to(torch.int).tolist())  # Valid column indices
+        col_indices.extend(
+            pred_indices[valid_mask].to(torch.int).tolist()
+        )  # Valid column indices
         values.extend(pred_signs[valid_mask].tolist())  # Valid signs
 
     # Convert row_indices, col_indices, and values to PyTorch tensors

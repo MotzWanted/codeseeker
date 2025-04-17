@@ -1,4 +1,5 @@
 from functools import partial
+from itertools import chain
 import json
 import re
 import typing as typ
@@ -16,12 +17,21 @@ from trie import models
 ANSWER_PATTERN = r"<answer>.*?(\b[1-9]\d{0,3}(?:\s*,\s*[1-9]\d{0,3})*\b).*?<\/answer>"
 
 
+class Code(pydantic.BaseModel):
+    """Model for a code."""
+
+    name: str
+    description: str | None = None
+    etiology: bool
+    manifestation: bool
+
+
 class InputModel(pydantic.BaseModel):
     """Input model for the Locate Agent."""
 
     note: str
-    codes: list[models.Code]
-    instructional_notes: list[models.Code]
+    codes: list[Code]
+    instructional_notes: list[models.InstructionalNote]
 
 
 class OutputModel(pydantic.BaseModel):
@@ -45,8 +55,8 @@ class MockAssignAgent(HfBaseAgent):
     def __init__(
         self,
         n_samples: int,
-        per_code: bool = True,
-        path_to_negatives: str = "data/medical-coding-systems/negatives/icd10cm_tabular_2022_negatives.json",
+        path_to_negatives: str = "data/medical-coding-systems/negatives/icd10cm_2022_negatives.json",
+        per_code: bool = False,
         *args,
         **kwargs,
     ):
@@ -57,6 +67,8 @@ class MockAssignAgent(HfBaseAgent):
         self.n_samples = n_samples
         self.per_code = per_code
         self.rng = np.random.RandomState(self.seed)
+        self.weights = np.exp(-0.5 * np.arange(100))
+        self.weights /= self.weights.sum()
 
     async def _warmup(self, row: InputModel) -> None:
         """Warm up the model with a dummy request."""
@@ -85,43 +97,60 @@ class MockAssignAgent(HfBaseAgent):
         )
 
     def _sample_negatives(self, code_id: str) -> list[str]:
-        """Sample negatives for a given code."""
-        population = self.negatives[code_id]
-        weights = np.exp(-0.5 * np.arange(len(population)))  # Exponential decay
-        weights /= weights.sum()
+        """Sample negatives for a given code (with capped population)."""
+        population = self.negatives[code_id][:100]  # Cap to first 100 items
+        n = min(len(population), self.n_samples)
+        if n == 0:
+            return []
         return self.rng.choice(
-            population, size=self.n_samples, replace=False, p=weights
+            population, size=n, replace=False, p=self.weights
         ).tolist()
+
+    def _code_from_trie(self, code: str) -> Code:
+        trie_entry = self.trie[code]
+        return Code(
+            name=trie_entry.name,
+            description=trie_entry.description,
+            etiology=trie_entry.etiology,  # type: ignore
+            manifestation=trie_entry.manifestation,  # type: ignore
+        )
+
+    def _to_code(self, codes: list[str]) -> list[Code]:
+        return [self._code_from_trie(c) for c in codes]
 
     def _format_input(self, row: dict[str, typ.Any]) -> list[InputModel]:
         """Format the input."""
         m = BaseModel(**row)
 
-        negative_ids: list[list[str]] = [
-            self._sample_negatives(code) for code in m.targets
-        ]
-        positives: list[models.Code] = [
-            self.trie.tabular[self.trie.lookup[code]] for code in m.targets
-        ]
-        negatives: list[list[models.Code]] = [
-            [self.trie.tabular[self.trie.lookup[code]] for code in codes]
-            for codes in negative_ids
-        ]
+        negative_ids = [self._sample_negatives(code) for code in m.targets]
+        positives = self._to_code(m.targets)
+        negatives: list[list[Code]] = [self._to_code(ids) for ids in negative_ids]
         if self.per_code:
-            codes = [
-                sorted([pos] + negs, key=lambda c: c.name)
-                for pos, negs in zip(positives, negatives)
-            ]
-            return [
-                InputModel(note=m.note, codes=sublist, instructional_notes=sublist)
-                for sublist in codes
-            ]
+            # Per-code grouping of positive + negatives
+            inputs = []
+            for pos, neg_group in zip(positives, negatives):
+                group = [pos] + neg_group
+                group.sort(key=lambda c: c.name)
+                code_names = [c.name for c in group]
+                instructions = self.trie.get_instructional_notes(codes=code_names)
+                inputs.append(
+                    InputModel(
+                        note=m.note, codes=group, instructional_notes=instructions
+                    )
+                )
+            return inputs
+
         else:
-            codes = sorted(
-                [code for sublist in negatives for code in sublist] + positives,
-                key=lambda c: c.name,
+            all_codes = sorted(
+                list(chain.from_iterable(negatives)) + positives, key=lambda c: c.name
             )
-            return [InputModel(note=m.note, codes=codes, instructional_notes=codes)]
+            code_names = [c.name for c in all_codes]
+            instruction_notes = self.trie.get_instructional_notes(codes=code_names)
+            return [
+                InputModel(
+                    note=m.note, codes=all_codes, instructional_notes=instruction_notes
+                )
+            ]
 
     def compress_choices(self, choices: list[ResponseChoice]) -> tuple[list[int], str]:
         """Compress the choices."""
@@ -138,6 +167,66 @@ class MockAssignAgent(HfBaseAgent):
             )
         return preds, c.content
 
+    @staticmethod
+    def sample_negatives(
+        negatives: list[list[str]],
+        positives: list[str],
+        per_positive: int,
+        seed: int | str = 42,
+    ) -> list[str]:
+        # Ensure the total number of samples does not exceed 50
+        negatives_to_sample = len(positives) * per_positive
+        if negatives_to_sample == 0:
+            return []
+        rng = np.random.RandomState(int(seed))
+        # Step 1: Determine the initial fair share per sublist
+        num_sublists = len(negatives)
+        if num_sublists == 0:
+            raise ValueError("No negatives to sample from")
+        base_samples_per_sublist = negatives_to_sample // num_sublists
+        remainder = negatives_to_sample % num_sublists  # Leftover samples
+
+        selected_negatives = []
+        remaining_negatives = negatives_to_sample
+
+        # Step 2: Assign samples as evenly as possible
+        for i, sublist in enumerate(sorted(negatives)):
+            if remaining_negatives <= 0:
+                break
+            positive_set = set(positives)
+            selected_set = set(selected_negatives)
+
+            unique_sublist = [
+                code
+                for code in sublist
+                if code not in positive_set and code not in selected_set
+            ]
+
+            if len(unique_sublist) == 0:
+                continue
+
+            indices = np.arange(len(unique_sublist))
+            weights = np.exp(-0.5 * indices)  # Exponential decay
+            weights /= weights.sum()  # Normalize to get probabilities
+
+            num_to_sample = min(
+                len(unique_sublist),
+                base_samples_per_sublist + (1 if i < remainder else 0),
+            )
+            sampled = rng.choice(
+                unique_sublist, size=num_to_sample, replace=False, p=weights
+            ).tolist()
+
+            selected_negatives.extend(sampled)
+            remaining_negatives -= len(sampled)
+
+        if len(selected_negatives) != negatives_to_sample:
+            raise ValueError(
+                f"Sampled {len(selected_negatives)} negatives, but expected {negatives_to_sample}"
+            )
+
+        return selected_negatives
+
 
 def create_assign_agent(
     agent_type: str,
@@ -148,21 +237,21 @@ def create_assign_agent(
     """
     Factory method to create an AssignAgent instance based on the specified type.
     """
-    if agent_type == "mock-per-code":
-        return partial(
-            MockAssignAgent,
-            prompt_name=prompt_name,
-            seed=seed,
-            sampling_params=sampling_params,
-            per_code=True,
-        )
-    elif agent_type == "mock":
+    if agent_type == "mock":
         return partial(
             MockAssignAgent,
             prompt_name=prompt_name,
             seed=seed,
             sampling_params=sampling_params,
             per_code=False,
+        )
+    elif agent_type == "mock-single":
+        return partial(
+            MockAssignAgent,
+            prompt_name=prompt_name,
+            seed=seed,
+            sampling_params=sampling_params,
+            per_code=True,
         )
     else:
         raise ValueError(f"Unsupported agent type: {agent_type}")
