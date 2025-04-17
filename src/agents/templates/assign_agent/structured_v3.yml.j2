@@ -25,8 +25,7 @@
 - name: clinical concepts
   role: user
   content: |
-    ====== Instructional Notes ======
-    {% for g in guidelines if g.assignable %}
+    ====== Instructional Notes ======{% for g in guidelines if g.assignable %}
     {% set code = g.pop("code") %}
       Code: "{{ code }}"{% for key, value in g.items() if value is iterable and value %}
       |--- {{ key | replace("_", " ") | title }}:{% for v in value %}

@@ -25,7 +25,9 @@ class Root(pydantic.BaseModel):
     parent_id: str = ""
     children_ids: List[str] = pydantic.Field(default_factory=list)
 
-    model_config = SettingsConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid")
+    model_config = SettingsConfigDict(
+        frozen=True, arbitrary_types_allowed=True, extra="forbid"
+    )
 
 
 class Category(Root):
@@ -37,7 +39,9 @@ class Category(Root):
     notes: Optional[List[str]] = pydantic.Field(default_factory=lambda: [])
     excludes1: Optional[list[str]] = pydantic.Field(default_factory=lambda: [])
     excludes2: Optional[list[str]] = pydantic.Field(default_factory=lambda: [])
-    use_additional_code: Optional[list[str]] = pydantic.Field(default_factory=lambda: [])
+    use_additional_code: Optional[list[str]] = pydantic.Field(
+        default_factory=lambda: []
+    )
     includes: Optional[list[str]] = pydantic.Field(default_factory=lambda: [])
     code_first: Optional[list[str]] = pydantic.Field(default_factory=lambda: [])
     code_also: Optional[list[str]] = pydantic.Field(default_factory=lambda: [])
@@ -119,7 +123,9 @@ class Trie:
                     return dill.load(f)
             except ModuleNotFoundError as e:
                 # Handle the missing module by logging the error and proceeding with re-parsing
-                print(f"Error loading cache {cache_key}: {e}. Re-parsing and re-saving cache.")
+                print(
+                    f"Error loading cache {cache_key}: {e}. Re-parsing and re-saving cache."
+                )
                 cache_path.unlink()
                 return None  # Trigger re-parsing
         return None
@@ -163,7 +169,9 @@ class Trie:
         is_root = False
         if not root_id:
             root_id = f"{root_char}"
-            root_node = Category(id=root_id, name=root_char, description="", min=root_char, max=root_char)
+            root_node = Category(
+                id=root_id, name=root_char, description="", min=root_char, max=root_char
+            )
             self.roots.append(root_id)
             self.all[root_id] = root_node
             is_root = True
@@ -193,7 +201,9 @@ class Trie:
     #     candidate.children_ids.append(node.id)
 
     def get_leaves(self) -> list[ICD]:
-        return [n for n in self.all.values() if not n.children_ids and isinstance(n, ICD)]
+        return [
+            n for n in self.all.values() if not n.children_ids and isinstance(n, ICD)
+        ]
 
     def get_guidelines(self, codes: list[str]) -> dict[str, typing.Any]:
         guideline_fields = [
@@ -213,12 +223,18 @@ class Trie:
             for parent in reversed([node] + self.get_all_parents(node.id)):
                 if "icd10cm" in parent.name or parent.id in included_parents:
                     continue
-                guideline_data = {k: v for k, v in parent.model_dump(include=guideline_fields).items() if v}
+                guideline_data = {
+                    k: v
+                    for k, v in parent.model_dump(include=guideline_fields).items()
+                    if v
+                }
                 if not guideline_data:
                     continue
                 guideline_data["code"] = parent.name
                 guideline_data["assignable"] = parent.assignable
-                guidelines.append(guideline_data)  # Prepend guideline_data to guidelines
+                guidelines.append(
+                    guideline_data
+                )  # Prepend guideline_data to guidelines
                 included_parents.add(parent.id)
 
         return guidelines
@@ -307,13 +323,21 @@ class XMLTrie(Trie):
     def parse_table(trie: Trie, root: ET.Element, root_node_id: str) -> "XMLTrie":
         """Parse PCS tables and insert them into the trie."""
         num_tables = len(root.findall("pcsTable"))
-        code_root = Root(id=f"{root_node_id}", name=f"{root_node_id}", min="1", max=f"{num_tables}", assignable=False)
+        code_root = Root(
+            id=f"{root_node_id}",
+            name=f"{root_node_id}",
+            min="1",
+            max=f"{num_tables}",
+            assignable=False,
+        )
         trie.roots.append(code_root.id)
         trie.all[code_root.id] = code_root
         trie.lookup[code_root.name] = code_root.id
         pcs_tables = root.findall("pcsTable")
         for table_index, pcs_table in track(
-            enumerate(pcs_tables), description="Parsing PCS tables", total=len(pcs_tables)
+            enumerate(pcs_tables),
+            description="Parsing PCS tables",
+            total=len(pcs_tables),
         ):
             table_id = f"{root_node_id}_Table_{table_index + 1}"
             num_rows = len(pcs_table.findall("pcsRow"))
@@ -329,7 +353,9 @@ class XMLTrie(Trie):
             trie.insert(table_node, root_char=root_node_id)
 
             fixed_axes = []
-            for axis in sorted(pcs_table.findall("axis"), key=lambda x: int(x.get("pos", 0))):
+            for axis in sorted(
+                pcs_table.findall("axis"), key=lambda x: int(x.get("pos", 0))
+            ):
                 fixed_axes.append(axis)
 
             for pcs_row in pcs_table.findall("pcsRow"):
@@ -352,34 +378,58 @@ class XMLTrie(Trie):
     @staticmethod
     def parse_tabular(trie: Trie, root: ET.Element, root_node_id: str) -> "XMLTrie":
         num_chapters = len(root.findall("chapter"))
-        code_root = Root(id=f"{root_node_id}", name=f"{root_node_id}", min="1", max=f"{num_chapters}")
+        code_root = Root(
+            id=f"{root_node_id}", name=f"{root_node_id}", min="1", max=f"{num_chapters}"
+        )
         trie.roots.append(code_root.id)
         trie.all[code_root.id] = code_root
         trie.lookup[code_root.name] = code_root.id
-        for chapter in track(root.findall("chapter"), description="Parsing ICD-10-CM chapters"):
+        for chapter in track(
+            root.findall("chapter"), description="Parsing ICD-10-CM chapters"
+        ):
             chapter_id = chapter.findtext("name", "")
             section_index = chapter.findall(".//sectionIndex")[0]
             first, last = (
                 section_index.findall("sectionRef")[0].get("first"),
                 section_index.findall("sectionRef")[-1].get("last"),
             )
-            trie._parse_cm_category(trie, chapter, name=chapter_id, first=first, last=last, parent_name=root_node_id)
+            trie._parse_cm_category(
+                trie,
+                chapter,
+                name=chapter_id,
+                first=first,
+                last=last,
+                parent_name=root_node_id,
+            )
             for section in chapter.findall("section"):
                 section_id = section.get("id", "")
                 first = section_id.split("-")[0]
                 last = section_id.split("-")[-1]
                 if first == last:
                     section_id = f"{first}-{last}"
-                trie._parse_cm_category(trie, section, name=section_id, first=first, last=last, parent_name=chapter_id)
+                trie._parse_cm_category(
+                    trie,
+                    section,
+                    name=section_id,
+                    first=first,
+                    last=last,
+                    parent_name=chapter_id,
+                )
                 # For each diagnosis within the section
                 for diag in section.findall("diag"):
                     trie._parse_cm_element(
-                        trie, diag, chapter_id=chapter_id, parent_name=section_id, seventh_characters=[]
+                        trie,
+                        diag,
+                        chapter_id=chapter_id,
+                        parent_name=section_id,
+                        seventh_characters=[],
                     )
         return trie
 
     @staticmethod
-    def from_xml_file(file_path: str, coding_system: str, use_cache: bool = True) -> "XMLTrie":
+    def from_xml_file(
+        file_path: str, coding_system: str, use_cache: bool = True
+    ) -> "XMLTrie":
         cache_key = f"xmltrie_{coding_system}_{Path(file_path).stem}"
 
         # Load from cache if enabled and valid cache exists
@@ -400,14 +450,21 @@ class XMLTrie(Trie):
 
     @staticmethod
     def _parse_cm_category(
-        trie: "XMLTrie", chapter: ET.Element, name: str, first: str, last: str, parent_name: str
+        trie: "XMLTrie",
+        chapter: ET.Element,
+        name: str,
+        first: str,
+        last: str,
+        parent_name: str,
     ) -> None:
         desc = chapter.findtext("desc", default="")
         notes = [note.text for note in chapter.findall("notes/note")]
         includes = [note.text for note in chapter.findall("includes/note")]
         excludes1 = [excl.text for excl in chapter.findall("excludes1/note")]
         excludes2 = [excl.text for excl in chapter.findall("excludes2/note")]
-        use_additional_code = [note.text for note in chapter.findall("useAdditionalCode/note")]
+        use_additional_code = [
+            note.text for note in chapter.findall("useAdditionalCode/note")
+        ]
         node = Category(
             id=name,
             name=name,
@@ -437,11 +494,15 @@ class XMLTrie(Trie):
         node_data = {
             "notes": [note.text for note in element.findall("notes/note")],
             "includes": [note.text for note in element.findall("includes/note")],
-            "inclusion_term": [term.text for term in element.findall("inclusionTerm/note")],
+            "inclusion_term": [
+                term.text for term in element.findall("inclusionTerm/note")
+            ],
             "excludes1": [excl.text for excl in element.findall("excludes1/note")],
             "excludes2": [excl.text for excl in element.findall("excludes2/note")],
             "code_first": [note.text for note in element.findall("codeFirst/note")],
-            "use_additional_code": [note.text for note in element.findall("useAdditionalCode/note")],
+            "use_additional_code": [
+                note.text for note in element.findall("useAdditionalCode/note")
+            ],
             "code_also": [note.text for note in element.findall("codeAlso/note")],
             "manifestation": len(element.findall("codeFirst/note")) > 0,
             "etiology": len(element.findall("useAdditionalCode/note")) > 0,
@@ -451,7 +512,11 @@ class XMLTrie(Trie):
         if not seventh_characters and element.find("sevenChrDef") is not None:
             for child in element.findall("sevenChrDef/extension"):
                 seventh_characters.append(
-                    SeventhCharacter(character=child.attrib["char"], name=child.text, parent_name=name)
+                    SeventhCharacter(
+                        character=child.attrib["char"],
+                        name=child.text,
+                        parent_name=name,
+                    )
                 )
 
         if diags:
@@ -468,17 +533,33 @@ class XMLTrie(Trie):
                 **node_data,
             )
         else:
-            node = ICD(id=name, chapter_id=chapter_id, parent_id=parent_name, name=name, description=desc, **node_data)
+            node = ICD(
+                id=name,
+                chapter_id=chapter_id,
+                parent_id=parent_name,
+                name=name,
+                description=desc,
+                **node_data,
+            )
 
         trie.insert(node, root_char=parent_name)
 
-        if seventh_characters and not diags and seventh_characters[0].parent_name in name:
+        if (
+            seventh_characters
+            and not diags
+            and seventh_characters[0].parent_name in name
+        ):
             for sc in seventh_characters:
                 padded_code = XMLTrie.pad_code(name)
                 sc_name = padded_code + sc.character
                 sc_desc = desc + " " + f"({sc.name})"
                 sc_node = ICD(
-                    id=sc_name, chapter_id=chapter_id, parent_id=name, name=sc_name, description=sc_desc, **node_data
+                    id=sc_name,
+                    chapter_id=chapter_id,
+                    parent_id=name,
+                    name=sc_name,
+                    description=sc_desc,
+                    **node_data,
                 )
                 trie.insert(sc_node, root_char=name)
             seventh_characters = []
@@ -486,16 +567,25 @@ class XMLTrie(Trie):
         # Recursively process nested diag elements
         for sub_diag in element.findall("diag"):
             XMLTrie._parse_cm_element(
-                trie, sub_diag, chapter_id=chapter_id, parent_name=name, seventh_characters=seventh_characters
+                trie,
+                sub_diag,
+                chapter_id=chapter_id,
+                parent_name=name,
+                seventh_characters=seventh_characters,
             )
 
     @staticmethod
-    def _parse_pcs_row(trie: "XMLTrie", pcs_row: ET.Element, fixed_axes: list, parent_name: str) -> None:
+    def _parse_pcs_row(
+        trie: "XMLTrie", pcs_row: ET.Element, fixed_axes: list, parent_name: str
+    ) -> None:
         """Parse a pcsRow element and generate composite codes."""
         variable_axes = []
 
         for axis in sorted(pcs_row.findall("axis"), key=lambda x: int(x.get("pos", 0))):
-            axis_codes = [(label.attrib["code"], label.text, axis.findtext("title")) for label in axis.findall("label")]
+            axis_codes = [
+                (label.attrib["code"], label.text, axis.findtext("title"))
+                for label in axis.findall("label")
+            ]
             variable_axes.append(axis_codes)
 
         nodes = []
@@ -503,11 +593,21 @@ class XMLTrie(Trie):
             if i == 0:
                 for code, label, title in axis:
                     # Combine with fixed axes code
-                    complete_code = "".join([x.find("label").attrib["code"] for x in fixed_axes] + [code])
-                    desc_begin = " | ".join(f"{x.find('title').text}: {x.find('label').text}" for x in fixed_axes)
+                    complete_code = "".join(
+                        [x.find("label").attrib["code"] for x in fixed_axes] + [code]
+                    )
+                    desc_begin = " | ".join(
+                        f"{x.find('title').text}: {x.find('label').text}"
+                        for x in fixed_axes
+                    )
                     desc_end = f"{title}: {label}"
                     desc = f"{desc_begin} | {desc_end}"
-                    node = ICD(id=complete_code, name=complete_code, parent_id=parent_name, description=desc)
+                    node = ICD(
+                        id=complete_code,
+                        name=complete_code,
+                        parent_id=parent_name,
+                        description=desc,
+                    )
                     trie.insert(node, root_char=parent_name)
                     nodes.append(node)
             else:
@@ -518,13 +618,20 @@ class XMLTrie(Trie):
                         desc_begin = node.description
                         desc_end = f"{title}: {label}"
                         desc = f"{desc_begin} | {desc_end}"
-                        new_node = ICD(id=complete_code, name=complete_code, parent_id=parent_name, description=desc)
+                        new_node = ICD(
+                            id=complete_code,
+                            name=complete_code,
+                            parent_id=parent_name,
+                            description=desc,
+                        )
                         trie.insert(new_node, root_char=parent_name)
                         new_nodes.append(new_node)
                 nodes = new_nodes
 
 
-def get_hard_negatives_for_code(code: str, trie: Trie, num: int | None = None, seed: int = 42) -> List[str]:
+def get_hard_negatives_for_code(
+    code: str, trie: Trie, num: int | None = None, seed: int = 42
+) -> List[str]:
     """Gets hard negatives for a given code by going one level up in the trie."""
     seen_codes = set([code])
 
@@ -555,7 +662,9 @@ def get_hard_negatives_for_code(code: str, trie: Trie, num: int | None = None, s
     return hard_negatives if num is None else hard_negatives[:num]
 
 
-def get_hard_negatives_for_list_of_codes(codes: list[str], trie: Trie, num: int) -> List[str]:
+def get_hard_negatives_for_list_of_codes(
+    codes: list[str], trie: Trie, num: int
+) -> List[str]:
     hard_negatives = set()  # Use a set to store unique hard negatives
     for code in codes:
         hard_negatives.update(get_hard_negatives_for_code(code, trie, num=num))
@@ -564,12 +673,17 @@ def get_hard_negatives_for_list_of_codes(codes: list[str], trie: Trie, num: int)
 
 
 def add_hard_negatives_to_set(
-    data: pl.DataFrame, trie: Trie, source_col: str, dest_col: str, num: int | None = None
+    data: pl.DataFrame,
+    trie: Trie,
+    source_col: str,
+    dest_col: str,
+    num: int | None = None,
 ) -> pl.DataFrame:
     data = data.with_columns(
         pl.col(source_col)
         .map_elements(
-            lambda codes: get_hard_negatives_for_list_of_codes(codes, trie, num=num), return_dtype=pl.List(pl.Utf8)
+            lambda codes: get_hard_negatives_for_list_of_codes(codes, trie, num=num),
+            return_dtype=pl.List(pl.Utf8),
         )
         .alias(dest_col)
     )
@@ -578,7 +692,9 @@ def add_hard_negatives_to_set(
     return data
 
 
-def _split_into_pcs_and_cm(cm_trie: XMLTrie, pcs_trie: XMLTrie, codes: list[str]) -> tuple[list[str], list[str]]:
+def _split_into_pcs_and_cm(
+    cm_trie: XMLTrie, pcs_trie: XMLTrie, codes: list[str]
+) -> tuple[list[str], list[str]]:
     """Split the codes into PCS and CM codes."""
     pcs_codes = []
     cm_codes = []
@@ -600,7 +716,9 @@ def _split_into_pcs_and_cm(cm_trie: XMLTrie, pcs_trie: XMLTrie, codes: list[str]
     return pcs_codes, cm_codes
 
 
-def get_code_objects(cm_trie: XMLTrie, pcs_trie: XMLTrie, codes: list[str]) -> list[Node]:
+def get_code_objects(
+    cm_trie: XMLTrie, pcs_trie: XMLTrie, codes: list[str]
+) -> list[Node]:
     """Get the code descriptions."""
     pcs_codes, cm_codes = _split_into_pcs_and_cm(cm_trie, pcs_trie, codes)
     nodes = []
@@ -611,7 +729,9 @@ def get_code_objects(cm_trie: XMLTrie, pcs_trie: XMLTrie, codes: list[str]) -> l
     return sorted(nodes, key=lambda code: code.name)
 
 
-def get_code_guidelines(cm_trie: XMLTrie, pcs_trie: XMLTrie, codes: list[str]) -> list[tuple[str, dict[str, str]]]:
+def get_code_guidelines(
+    cm_trie: XMLTrie, pcs_trie: XMLTrie, codes: list[str]
+) -> list[tuple[str, dict[str, str]]]:
     """Get the code descriptions."""
     pcs_codes, cm_codes = _split_into_pcs_and_cm(cm_trie, pcs_trie, codes)
     guidelines = []
@@ -628,7 +748,9 @@ def get_code_guidelines(cm_trie: XMLTrie, pcs_trie: XMLTrie, codes: list[str]) -
     return guidelines
 
 
-def get_random_negatives_for_codes(codes: list[str], trie: Trie, num: int, seed: int = 42) -> List[str]:
+def get_random_negatives_for_codes(
+    codes: list[str], trie: Trie, num: int, seed: int = 42
+) -> List[str]:
     """
     Get soft negatives for a given code. These are codes that are not parents, children,
     or the code itself.
@@ -645,7 +767,11 @@ def get_random_negatives_for_codes(codes: list[str], trie: Trie, num: int, seed:
     excluded_codes = set(codes)
 
     # Find all codes in the trie, excluding the ones from the excluded set
-    soft_negatives = [n.name for n in trie.all.values() if n.name not in excluded_codes and isinstance(n, Node)]
+    soft_negatives = [
+        n.name
+        for n in trie.all.values()
+        if n.name not in excluded_codes and isinstance(n, Node)
+    ]
 
     shuffle(soft_negatives, random_state=seed)
     return soft_negatives[:num]
@@ -653,7 +779,9 @@ def get_random_negatives_for_codes(codes: list[str], trie: Trie, num: int, seed:
 
 if __name__ == "__main__":
     xml_trie = XMLTrie.from_xml_file(
-        Path(__file__).parent.parent.parent / "data/medical-coding-systems/icd" / "icd10cm_tabular_2025.xml",
+        Path(__file__).parent.parent.parent
+        / "data/medical-coding-systems/icd"
+        / "icd10cm_tabular_2025.xml",
         coding_system="icd10cm",
         use_cache=False,
     )
@@ -671,7 +799,9 @@ if __name__ == "__main__":
     print(f"Code {test_code} corresponds to: {text_for_code}")
 
     xml_trie = XMLTrie.from_xml_file(
-        Path(__file__).parent.parent.parent / "data/medical-coding-systems/icd" / "icd10pcs_tables_2025.xml",
+        Path(__file__).parent.parent.parent
+        / "data/medical-coding-systems/icd"
+        / "icd10pcs_tables_2025.xml",
         coding_system="icd10pcs",
         use_cache=False,
     )

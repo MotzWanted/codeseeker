@@ -72,32 +72,36 @@ class MimicAdapter(Adapter):
         return type(self)._negatives_data  # type: ignore
 
 
-def sample_from_nested_list(
-    nested_list: list[list[str]],
+def sample_negatives(
+    negatives: list[list[str]],
     positives: list[str],
-    negatives: int,
+    per_positive: int,
     seed: int | str = 42,
 ) -> list[str]:
     # Ensure the total number of samples does not exceed 50
-    negatives_to_sample = min(negatives, negatives - len(positives))
+    negatives_to_sample = len(positives) * per_positive
     if negatives_to_sample == 0:
         return []
     rng = np.random.RandomState(int(seed))
     # Step 1: Determine the initial fair share per sublist
-    num_sublists = len(nested_list)
+    num_sublists = len(negatives)
     if num_sublists == 0:
         raise ValueError("No negatives to sample from")
     base_samples_per_sublist = negatives_to_sample // num_sublists
     remainder = negatives_to_sample % num_sublists  # Leftover samples
 
-    selected_codes = []
+    selected_negatives = []
     remaining_negatives = negatives_to_sample
 
     # Step 2: Assign samples as evenly as possible
-    for i, sublist in enumerate(sorted(nested_list)):
+    for i, sublist in enumerate(sorted(negatives)):
         if remaining_negatives <= 0:
             break
-        unique_sublist = [code for code in sublist if code not in positives and code not in selected_codes]
+        unique_sublist = [
+            code
+            for code in sublist
+            if code not in positives and code not in selected_negatives
+        ]
 
         if len(unique_sublist) == 0:
             continue
@@ -106,13 +110,22 @@ def sample_from_nested_list(
         weights = np.exp(-0.5 * indices)  # Exponential decay
         weights /= weights.sum()  # Normalize to get probabilities
 
-        num_to_sample = min(len(unique_sublist), base_samples_per_sublist + (1 if i < remainder else 0))
-        sampled = rng.choice(unique_sublist, size=num_to_sample, replace=False, p=weights).tolist()
+        num_to_sample = min(
+            len(unique_sublist), base_samples_per_sublist + (1 if i < remainder else 0)
+        )
+        sampled = rng.choice(
+            unique_sublist, size=num_to_sample, replace=False, p=weights
+        ).tolist()
 
-        selected_codes.extend(sampled)
+        selected_negatives.extend(sampled)
         remaining_negatives -= len(sampled)
 
-    return selected_codes[:negatives]
+    if selected_negatives != negatives_to_sample:
+        raise ValueError(
+            f"Sampled {len(selected_negatives)} negatives, but expected {negatives_to_sample}"
+        )
+
+    return selected_negatives
 
 
 def string_to_seed(string: str) -> int:
@@ -127,10 +140,14 @@ class MimicForTrainingAdapter(MimicAdapter):
     output_model = BaseModel
 
     @classmethod
-    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseModel:
+    def translate_row(
+        cls, row: dict[str, typ.Any], options: DatasetOptions
+    ) -> BaseModel:
         """Adapt a row."""
 
-        def _format_row(row: dict[str, typ.Any], options: DatasetOptions) -> dict[str, typ.Any]:
+        def _format_row(
+            row: dict[str, typ.Any], options: DatasetOptions
+        ) -> dict[str, typ.Any]:
             cm_trie = cls().cm_trie
             pcs_trie = cls().pcs_trie
             negatives_data = cls().negatives
@@ -142,7 +159,9 @@ class MimicForTrainingAdapter(MimicAdapter):
                 pcs_trie,  # type: ignore
                 struct_row.codes,
             )
-            negatives: list[list[list[str]]] = [negatives_data[code] for code in positives if code in negatives_data]
+            negatives: list[list[list[str]]] = [
+                negatives_data[code] for code in positives if code in negatives_data
+            ]
             sampled_negatives = sample_from_nested_list(
                 negatives,
                 positives=positives,
@@ -157,7 +176,9 @@ class MimicForTrainingAdapter(MimicAdapter):
             }[options.order]
             ordered_classes = order_fn(classes, seed)
             if len(ordered_classes) < 50:
-                raise ValueError(f"Length of sorted classes is less than 50: {len(ordered_classes)}")
+                raise ValueError(
+                    f"Length of sorted classes is less than 50: {len(ordered_classes)}"
+                )
 
             return {
                 "aid": _id,
@@ -182,6 +203,8 @@ class MimicIdentifyAdapter(MimicAdapter):
     output_model = MimicModel
 
     @classmethod
-    def translate_row(cls, row: dict[str, typ.Any], options: DatasetOptions) -> BaseModel:
+    def translate_row(
+        cls, row: dict[str, typ.Any], options: DatasetOptions
+    ) -> BaseModel:
         """Adapt a row."""
         return cls.output_model(**row)

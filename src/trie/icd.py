@@ -47,11 +47,11 @@ class ICD10Trie(Trie):
         return cls(download_path, *args, **kwargs)
 
     @classmethod
-    def from_directory(cls, local_directory: Path, *args, **kwargs) -> "ICD10Trie":
+    def from_dir(cls, path: Path, *args, **kwargs) -> "ICD10Trie":
         """Build the ICD trie from files that already exist locally."""
-        if not local_directory.exists():
-            raise FileNotFoundError(f"Directory {local_directory} does not exist.")
-        return cls(local_directory, *args, **kwargs)
+        if not path.exists():
+            raise FileNotFoundError(f"Directory {path} does not exist.")
+        return cls(path, *args, **kwargs)
 
     def parse(self) -> None:
         """Parse the downloaded ICD files."""
@@ -281,7 +281,8 @@ class ICD10Trie(Trie):
         self.lookup[root.name] = root.id
 
         for ch in track(chapters, description="Parsing ICD-10-CM chapters"):
-            ch_node = models.Category(
+            ch_node = models.CmCategory(
+                **ch.model_dump(),
                 id=f"{root.id}_{ch.chapter_id}",
                 name=ch.chapter_id,
                 parent_id="cm",
@@ -291,11 +292,11 @@ class ICD10Trie(Trie):
             )
             self.insert_to_tabular(ch_node)
             for sec in ch.sections:
-                sec_node = models.Category(
+                sec_node = models.CmCategory(
+                    **sec.model_dump(),
                     id=f"{ch_node.id}_{sec.section_id}",
                     name=sec.section_id,
                     parent_id=ch_node.id,
-                    description=sec.description,
                     min=sec.first,
                     max=sec.last,
                 )

@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections import defaultdict
 import pathlib
 
 from trie import models
@@ -48,9 +49,13 @@ class Trie(ABC):
                 children.extend(self.get_all_tabular_children(c_id))
         return children
 
-    def get_chapter_name(self, code: str) -> str:
+    def get_chapter_id(self, code: str) -> str:
         parents = self.get_all_tabular_parents(code)
-        return parents[-1].name
+        return parents[-1].id
+
+    def get_category_id(self, code: str) -> str:
+        parents = self.get_all_tabular_parents(code)
+        return parents[-2].id
 
     def get_all_main_terms(self) -> list[models.Term]:
         """Get all main terms in the index."""
@@ -87,6 +92,37 @@ class Trie(ABC):
 
     def get_leaves(self) -> list[models.Code]:
         return [n for n in self.tabular.values() if n.assignable]
+
+    def get_instructional_notes(
+        self, codes: list[str]
+    ) -> list[models.InstructionalNote]:
+        """Get all instructional notes for a given code."""
+        included_parents = set()
+        instructional_notes = defaultdict(list)
+        for c_id in codes:
+            c = self[c_id]
+            parents = [
+                p for p in self.get_all_tabular_parents(c_id) if p.id not in self.roots
+            ]
+            chapter = parents.pop(-1)
+            if chapter.name not in instructional_notes:
+                instructional_notes[chapter.name].append(
+                    models.InstructionalNote(**chapter.model_dump()).model_dump(
+                        exclude_none=True
+                    )
+                )
+            for parent in reversed([c] + parents):
+                if parent.id in included_parents:
+                    continue
+                instruct_note = models.InstructionalNote(**parent.model_dump())
+                # if all fields are empty or None, skip
+                if instruct_note.is_empty():
+                    continue
+                instructional_notes[chapter.id].append(
+                    instruct_note.model_dump(exclude_none=True)
+                )  # Prepend guideline_data to guidelines
+                included_parents.add(parent.id)
+        return [note for group in instructional_notes.values() for note in group]
 
     def get_root_leaves(self, root: str) -> list[models.Code]:
         """Get all codes under a specific root."""

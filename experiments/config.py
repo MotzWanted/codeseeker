@@ -5,12 +5,14 @@ import pathlib
 import typing as typ
 import datasets
 import pydantic
+from loguru import logger
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from throughster.factory import create_interface
 import torch
 
 from finetune.helpers import list2tensor_vectorized
 from finetune.monitor import ClassAggregator, MeanAggregator, Monitor
+from trie.base import Trie
 
 DUMP_FOLDER = pathlib.Path("~/research/codeseeker/experiments").expanduser()
 
@@ -205,7 +207,13 @@ class TrieClassificationMonitor(Monitor):
         prediction_ids = []
         target_ids = []
         for targets, predictions in zip(targets, predictions):
-            prediction_ids.append([self.trie[code_name] for code_name in predictions])
+            prediction_ids.append(
+                [
+                    self.trie[code_name]
+                    for code_name in predictions
+                    if code_name in self.trie
+                ]
+            )
             target_ids.append([self.trie[code_name] for code_name in targets])
 
         prediction_matrix = list2tensor_vectorized(
@@ -238,3 +246,34 @@ class TrieClassificationMonitor(Monitor):
             .float(),  # counting row wise exact matches
             "pos_ratio": preds.sum() / targets.sum(),
         }
+
+
+def format_dataset(
+    dataset: datasets.Dataset | datasets.DatasetDict,
+    trie: Trie,
+) -> datasets.Dataset:
+    """Format the dataset."""
+    if isinstance(dataset, datasets.DatasetDict):
+        dataset = datasets.concatenate_datasets(list(dataset.values()))
+
+    unique_codes: set[str] = set()
+    for codes in dataset["targets"]:
+        unique_codes.update(codes)
+    dataset = dataset.map(
+        lambda row: {
+            **row,
+            "targets": [code for code in row["targets"] if code in trie.lookup],
+        }
+    )
+
+    filtered_codes: set[str] = set()
+    for codes in dataset["targets"]:
+        filtered_codes.update(codes)
+
+    # print difference between unique_codes and filtered_codes
+    filtered_codes = unique_codes - filtered_codes
+    if filtered_codes:
+        logger.warning(
+            f"Number of filtered codes ({len(filtered_codes)}): `{filtered_codes}`"
+        )
+    return dataset

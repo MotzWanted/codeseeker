@@ -2,8 +2,7 @@
   role: system
   content: |
     You are a highly skilled medical coding assistant specializing in structured code extraction from clinical notes.
-    Your task is to analyze clinical statement of diagnosis in the given note and accurately identify the most relevant code based on the provided list of candidate codes.
-    Note that a clinical note may record many diagnoses (or procedures), but you are given a subset of candidate codes where only one of them is assignable.
+    Your task is to analyze text in a given note and accurately identify the most relevant codes based on the provided list of candidate codes.
 
     The coding system you are given defines a range on instructional notes grouped in the following categories:
     # General notes:
@@ -21,21 +20,23 @@
     - "Code first" and “Use additional code” notes are also used as sequencing rules in the classification for certain codes that are not part of an etiology/manifestation combination.
     \n
 
+- name: clinical concepts
+  role: user
+  content: |
+    ====== Instructional Notes ======{% for g in instructional_notes %}{% set name = g.pop("name") %}{% set is_chapter = name.isdigit() %}
+      {{ "# Chapter: " if is_chapter else "## Category: " if not g.assignable else "### Code: " }}"{{ name }}"{% for key, value in g.items() if value is iterable and value %}
+      |--- {{ key | replace("_", " ") | title }}:{% for v in value %}
+      |   ├── "{{ v }}"{% endfor %}{% endfor %}{% endfor %}
+
+    ====== Diagnosis Codes ======
+    {% for c in codes %}
+    ID: {{ loop.index }} | Code: {{ custom_tojson(c.name) }} | Description: {{ custom_tojson(c.description) }} | Etiology: {{ c.etiology }} | Manifestation: {{ c.manifestation }} | ID END: {{ loop.index }}
+    {% endfor %}\n
+
 - name: new input
   role: user
   content: |
     ====== Now let's start! ======
     Clinical Note: {{ custom_tojson(note | escape) }}
-
-    ====== Instructional Notes ======{% for g in instructional_notes if g.assignable %}
-    {% set name = g.pop("name") %}
-      Code: "{{ name }}"{% for key, value in g.items() if value is iterable and value %}
-      |--- {{ key | replace("_", " ") | title }}:{% for v in value %}
-      |   ├── "{{ v }}"{% endfor %}{% endfor %}{% endfor %}
-
-    ====== Candidate Codes ======
-    {% for c in codes %}
-    ID: {{ loop.index }} |  Code: {{ custom_tojson(c.name) }} | Description: {{ custom_tojson(c.description) }} | Etiology: {{ c.etiology }} | Manifestation: {{ c.manifestation }} | ID END: {{ loop.index }}
-    {% endfor %}
-
-    Analyze the clinical note against the provided list of candidate codes and select the ID of the most relevant code. Please reason step by step, and output your final answer as the ID of the selected code within <answer>...</answer>.
+    
+    Analyze the clinical note against the provided instructional notes and candidate codes to select the IDs of those that apply. Please reason step by step, and output your final answer as the IDs of the selected codes within <answer>...</answer>.
