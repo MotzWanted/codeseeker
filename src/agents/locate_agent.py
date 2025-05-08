@@ -49,8 +49,8 @@ class PLMICDLocateAgent(HfOperation):
         *args,
         **kwargs,
     ):
-        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_path)
-        self.model = PLMICDModel.from_pretrained(pretrained_model_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_path + "/tokenizer")
+        self.model = PLMICDModel.from_pretrained(pretrained_model_path + "/model")
         self.model.eval()
         self.device = device
         self.model.to(device)
@@ -68,7 +68,7 @@ class PLMICDLocateAgent(HfOperation):
         # Tokenize the data
         tokenized_inputs = self.tokenizer(
             batch_notes,
-            padding=True,
+            padding="longest",
             truncation=True,
             return_tensors="pt",
             max_length=self.note_max_length,
@@ -77,7 +77,7 @@ class PLMICDLocateAgent(HfOperation):
             outputs = self.model(**tokenized_inputs)
 
         # Sort the output logits for each entry in the batch and get the top k labels
-        logits = outputs.logits
+        logits = outputs.logits.sigmoid()
         top_k_logits, top_k_indices = torch.topk(logits, self.top_k, dim=-1)
         # Convert the top_k indices to labels
         # for item in batch... for index in item
