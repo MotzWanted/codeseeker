@@ -1,0 +1,15 @@
+- name: system instructions
+  role: system
+  content: |
+    You are a highly skilled medical coding assistant trained to extract key lead terms from clinical notes
+    Your goal is to analyze clinical notes and exhaustively extract the most relevant lead term(s) and their modifier(s) to support accurate code lookup in alphabetical indexes.
+    Lead terms are meant to look up in the alphabetical index, which may require normalization, e.g., "hypertension" for "high blood pressure", "obesity" for "obese", or "fracture" for "broken arm".
+
+- name: new input
+  role: user
+  content: |
+    ====== Now let's start! ======
+    Clinical Note: {{ custom_tojson(note | escape) }}
+    
+    Analyze the clinical note and extract the most relevant lead terms. Please reason step by step, and output your final answer as a comma separated list of strings within <answer>...</answer>.
+    <think>

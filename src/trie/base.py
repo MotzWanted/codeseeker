@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 import pathlib
 
+import numpy as np
+from rapidfuzz import fuzz, utils, process
+
 from trie import models
 
 TRIE_CACHE_DIR = pathlib.Path("~/.cache/trie").expanduser()
@@ -16,6 +19,7 @@ class Trie(ABC):
         self.tabular: dict[str, models.Code] = {}
         self.lookup: dict[str, str] = {}
         self.index: dict[str, models.Term] = {}
+        self.index_lookup: dict[str, str] = {}
 
     def __repr__(self) -> str:
         return str(self.tabular)
@@ -32,7 +36,7 @@ class Trie(ABC):
             parents.append(code)
         return parents
 
-    def get_all_index_parents(self, term_id: str) -> list[models.Code]:
+    def get_all_index_parents(self, term_id: str) -> list[models.Term]:
         parents = []
         code = self.index[term_id]
         while code.parent_id:
@@ -73,21 +77,36 @@ class Trie(ABC):
                 children.extend(self.get_all_term_children(c_id))
         return children
 
+    def get_assignable_terms(self) -> list[models.Term]:
+        """Get all assignable terms in the index."""
+        return [term for term in self.index.values() if term.assignable]
+
     def get_all_term_codes(self, term_id: str) -> list[str]:
         """Get all term codes in the index."""
         codes = set()
         if term_id not in self.index:
             raise ValueError(f"Term with id {term_id} does not exist in the index.")
         term = self.index[term_id]
-        if term.code:
+
+        if term.assignable and term.code:
             codes.add(term.code)
+            codes.update(self.get_all_tabular_children(term.code))
+            if term.manifestation_code:
+                codes.add(term.manifestation_code)
+        elif term.code and not term.assignable:
+            codes.update(self.get_all_tabular_children(term.code))
+
         sub_terms = self.get_all_term_children(term.id)
         for sub_term in sub_terms:
-            if sub_term.code:
-                if sub_term.assignable:
-                    codes.add(sub_term.code)
-                else:
-                    codes.update(self.get_all_tabular_children(sub_term.code))
+            if sub_term.assignable and sub_term.code:
+                codes.add(sub_term.code)
+                codes.update(self.get_all_tabular_children(sub_term.code))
+                if term.manifestation_code:
+                    codes.add(sub_term.manifestation_code)
+            elif sub_term.code and not sub_term.assignable:
+                codes.update(self.get_all_tabular_children(sub_term.code))
+
+        # Return both primary codes and manifestation codes, with manifestation codes last
         return list(codes)
 
     def get_leaves(self) -> list[models.Code]:
@@ -161,42 +180,42 @@ class Trie(ABC):
         """Insert a node into the index."""
         if node.id in self.index:
             raise ValueError(f"Node with id {node.id} already exists in the index.")
-
         self.index[node.id] = node
+        self.index_lookup[node.id] = node.title
+        node.path = node.title  # default path is the title
         if node.parent_id:
-            parents = self.get_all_index_parents(node.id)
-            for parent in parents:
+            parent = self.index[node.parent_id]  # only the direct parent
+            if node.id not in parent.children_ids:  # avoid duplicates
                 parent.children_ids.append(node.id)
+
+            # build the path (now just follow parent links)
+            parents = self.get_all_index_parents(node.id)[::-1]  # root → … → parent
+            node.path = ", ".join([p.title for p in parents] + [node.title])
+
+    def find_terms(
+        self, queries: list[str], main_terms: bool, limit: int = 1
+    ) -> list[models.Term]:
+        """Find a term in the index."""
+        if main_terms:
+            choices = []
+            ids = []
+            for term in self.get_all_main_terms():
+                choices.append(term.title)
+                ids.append(term.id)
+        else:
+            choices = list(self.index_lookup.values())
+            ids = list(self.index_lookup.keys())
+
+        fuzzy_matrix: np.ndarray = process.cdist(
+            queries,
+            choices,
+            scorer=fuzz.QRatio,
+            processor=utils.default_process,
+        )
+        indices = np.argsort(fuzzy_matrix, axis=1)[:, -limit:]
+        return [self.index[idx] for idx in np.array(ids)[indices].flatten()]
 
     @abstractmethod
     def parse(self, *args, **kwargs) -> "Trie":
         """Abstract method to parse the trie. Must be implemented by subclasses."""
         ...
-
-    # def get_guidelines(self, codes: list[str]) -> dict[str, typing.Any]:
-    #     guideline_fields = [
-    #         "notes",
-    #         "includes",
-    #         "excludes1",
-    #         "excludes2",
-    #         "use_additional_code",
-    #         "code_first",
-    #         "code_also",
-    #         "inclusion_term",
-    #     ]
-    #     guidelines = []
-    #     included_parents = set()
-    #     for c in codes:
-    #         code = self[c]
-    #         for parent in reversed([code] + self.get_all_parents(code.id)):
-    #             if "icd10cm" in parent.name or parent.id in included_parents:
-    #                 continue
-    #             guideline_data = {k: v for k, v in parent.model_dump(include=guideline_fields).items() if v}
-    #             if not guideline_data:
-    #                 continue
-    #             guideline_data["code"] = parent.name
-    #             guideline_data["assignable"] = parent.assignable
-    #             guidelines.append(guideline_data)  # Prepend guideline_data to guidelines
-    #             included_parents.add(parent.id)
-
-    #     return guidelines

@@ -18,26 +18,30 @@ class Arguments(cnf.BaseArguments):
     """Args for the script."""
 
     experiment_id: str = "assign-agent"
-    experiment_name: str = "mock-negatives-single"
+    experiment_name: str = "mock-negatives"
 
-    api_base: str = "http://localhost:6539/v1"
+    api_base: str = "http://localhost:6535/v1"
     deployment: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
     endpoint: typ.Literal["chat/completions", "completions"] = "completions"
 
     prompt_name: str = (
-        "assign_agent/per_code_v1:assign_agent/per_code_v2:assign_agent/per_code_v3:assign_agent/per_code_v4"  # lookup in `src/alignment/templates`
+        "assign_agent/structured_v1:assign_agent/structured_v2:assign_agent/structured_v3:assign_agent/structured_v4"
     )
 
-    agent_type: str = "mock-single"
+    agent_type: str = "mock-structured"
     temperature: float = 0.0
 
     dataset: str = "mdace-icd10cm"  # "mimic-iii-50" | "mimic-iv" | "mdace-icd10cm"
-    negatives: str = "0:1:3:5"  # number of negative samples to include in the prompt
+    negatives: str = (
+        "0:1:3:5:8:12:20"  # number of negative samples to include in the prompt
+    )
     seed: str = "1"  # e.g., "1:2:3:4:5"
     n_samples: int = 1
 
-    num_workers: int = 2
+    num_workers: int = 4
     batch_size: int = 1
+
+    debug: bool = False
 
     use_cache: bool = True  # whether to cache on request level
 
@@ -66,7 +70,7 @@ def run(args: Arguments):
             "num_proc": args.num_workers,
         }
         dset = dataloader.load_dataset(dset_config)
-        dset = cnf.format_dataset(dset, xml_trie)
+        dset = cnf.format_dataset(dset, xml_trie, args.debug)
         logger.info(f"Running {dataset} with seeds `{args._seeds}`.")
         for prompt_name in args._prompts:  # type: ignore
             for num_negs in args._negatives:  # type: ignore
@@ -129,7 +133,9 @@ def run(args: Arguments):
                     with open(save_folder / "responses.json", "w") as f:
                         cols_to_remove = set(
                             cnf._get_dataset(eval_data).column_names
-                        ) - set(["aid", "classes", "indexes", "targets", "response"])
+                        ) - set(
+                            ["aid", "note_type", "predictions", "targets", "response"]
+                        )
                         dump_data = eval_data.remove_columns(list(cols_to_remove))
                         json.dump(dump_data.to_list(), f)
                     with open(save_folder / "averages.json", "w") as f:

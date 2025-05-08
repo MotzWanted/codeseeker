@@ -5,14 +5,11 @@ import pathlib
 import typing as typ
 import datasets
 import pydantic
-from loguru import logger
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from throughster.factory import create_interface
 import torch
 
-from finetune.helpers import list2tensor_vectorized
 from finetune.monitor import ClassAggregator, MeanAggregator, Monitor
-from trie.base import Trie
 
 DUMP_FOLDER = pathlib.Path("~/research/codeseeker/experiments").expanduser()
 
@@ -115,6 +112,42 @@ def _init_client_fn(
         use_cache=use_cache,
         cache_dir=str(pathlib.Path(f"~/.cache/throughster/{deployment}").expanduser()),
     )
+
+
+def list2tensor_vectorized(
+    dim_x: int, dim_y: int, indices: list[set[int | float]]
+) -> torch.Tensor:
+    """Convert a list of indices to a sparse tensor."""
+    row_indices = []
+    col_indices = []
+    values = []
+
+    for i, preds in enumerate(indices):
+        preds = torch.tensor(
+            list(preds), dtype=torch.float32
+        )  # Convert the set to a PyTorch tensor
+        pred_signs = torch.where(preds < 0, -1, 1)  # Determine the sign
+        pred_indices = torch.abs(preds) - 1  # Get absolute indices (0-based)
+
+        # Filter valid indices (within bounds)
+        valid_mask = (pred_indices >= 0) & (pred_indices < dim_y)
+        valid_count = int(valid_mask.sum().item())  # Explicitly convert to Python int
+        row_indices.extend([i] * valid_count)  # Repeat row index for valid preds
+        col_indices.extend(
+            pred_indices[valid_mask].to(torch.int).tolist()
+        )  # Valid column indices
+        values.extend(pred_signs[valid_mask].tolist())  # Valid signs
+
+    # Convert row_indices, col_indices, and values to PyTorch tensors
+    row_indices = torch.tensor(row_indices, dtype=torch.long)
+    col_indices = torch.tensor(col_indices, dtype=torch.long)
+    values = torch.tensor(values, dtype=torch.float32)
+
+    # Create the sparse tensor
+    sparse_tensor = torch.zeros((dim_x, dim_y), dtype=torch.float32)
+    sparse_tensor[row_indices, col_indices] = values
+
+    return sparse_tensor
 
 
 class TrieClassificationMonitor(Monitor):
@@ -246,34 +279,3 @@ class TrieClassificationMonitor(Monitor):
             .float(),  # counting row wise exact matches
             "pos_ratio": preds.sum() / targets.sum(),
         }
-
-
-def format_dataset(
-    dataset: datasets.Dataset | datasets.DatasetDict,
-    trie: Trie,
-) -> datasets.Dataset:
-    """Format the dataset."""
-    if isinstance(dataset, datasets.DatasetDict):
-        dataset = datasets.concatenate_datasets(list(dataset.values()))
-
-    unique_codes: set[str] = set()
-    for codes in dataset["targets"]:
-        unique_codes.update(codes)
-    dataset = dataset.map(
-        lambda row: {
-            **row,
-            "targets": [code for code in row["targets"] if code in trie.lookup],
-        }
-    )
-
-    filtered_codes: set[str] = set()
-    for codes in dataset["targets"]:
-        filtered_codes.update(codes)
-
-    # print difference between unique_codes and filtered_codes
-    filtered_codes = unique_codes - filtered_codes
-    if filtered_codes:
-        logger.warning(
-            f"Number of filtered codes ({len(filtered_codes)}): `{filtered_codes}`"
-        )
-    return dataset

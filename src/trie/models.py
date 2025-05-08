@@ -1,4 +1,5 @@
 from collections import namedtuple
+import re
 import typing
 import pydantic
 from pydantic_settings import SettingsConfigDict
@@ -76,13 +77,38 @@ class Term(pydantic.BaseModel):
     """Represents a term in an alphabetic index."""
 
     id: str
-    assignable: bool
+    assignable: bool = False
     title: str
+    path: str | None = None
     code: str | None = None
+    manifestation_code: str | None = None
     see: str | None = None
     see_also: str | None = None
     parent_id: str
+    optional_modifiers: list[str] = pydantic.Field(default_factory=list)
     children_ids: list[str] = pydantic.Field(default_factory=list)
+
+    @pydantic.model_validator(mode="after")
+    def validate_code(self) -> "Term":
+        """Validate term fields."""
+        if isinstance(self.code, str):
+            self.assignable = True
+            if "-" in self.code:
+                self.assignable = False
+                self.code = self.code.replace("-", "").rstrip(".")
+        if isinstance(self.manifestation_code, str):
+            self.assignable = True
+        self.optional_modifiers = re.findall(r"\((.*?)\)", self.title)
+        if self.optional_modifiers:
+            self.title = re.sub(r"\(.*?\)", "", self.title).strip()
+        self.title = re.sub(r"\s+", " ", self.title)
+        self.path = self.path or self.title
+        return self
+
+    @pydantic.computed_field
+    def lead_id(self) -> str:
+        """Return the lead ID."""
+        return self.id.split(".")[0]
 
 
 class ICDFileMap(pydantic.BaseModel):
@@ -314,18 +340,10 @@ class CmIndexTerm(pydantic.BaseModel):
 
     title: str
     code: str | list[CmCell] | None = None
+    manifestation_code: str | None = None
     see: str | None = None
     see_also: str | None = None
     sub_terms: list["CmIndexTerm"] = []
-    assignable: bool = True
-
-    @pydantic.model_validator(mode="after")
-    def validate_code(self) -> "CmIndexTerm":
-        if isinstance(self.code, str):
-            if "-" in self.code:
-                self.assignable = False
-            self.code = self.code.replace("-", "").rstrip(".")
-        return self
 
 
 class CmLetter(pydantic.BaseModel):

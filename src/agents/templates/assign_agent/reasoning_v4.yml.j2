@@ -28,7 +28,7 @@
       |--- {{ key | replace("_", " ") | title }}:{% for v in value %}
       |   ├── "{{ v }}"{% endfor %}{% endfor %}{% endfor %}
 
-    ====== Diagnosis Codes ======
+    ====== Candidate Codes ======
     {% for c in codes %}
     ID: {{ loop.index }} | Code: {{ custom_tojson(c.name) }} | Description: {{ custom_tojson(c.description) }} | Etiology: {{ c.etiology }} | Manifestation: {{ c.manifestation }} | ID END: {{ loop.index }}
     {% endfor %}\n
