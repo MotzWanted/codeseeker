@@ -3,7 +3,7 @@ name = "entityseeker"
 version = "0.1.0"
 description = "Clinical Entity Linking with Large Language Models"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.12,<3.13"
 authors = [
     { name = "Andreas Geert Motzfeldt", email = "amo@corti.ai" },
     { name = "Valentin Liévin", email = "vli@corti.ai" }
@@ -12,28 +12,35 @@ dependencies = [
     "pydantic>=2.11.3",
     "pydantic-settings>=2.2.1",
     "loguru>=0.7.2",
-    "transformers>=4.48.3",
     "torch>=2.4.0",
-    "lightning>=2.1.3",
     "numba>=0.60.0",
-    "peft>=0.14.0",
     "wandb>=0.19.1",
     "prompt-poet<=0.0.42",
-    "tiktoken>=0.7.0",
-    "mlflow>=2.15.1",
-    "pyahocorasick>=2.1.0",
-    "stackprinter>=0.2.12",
-    "outlines>=0.1.11",
     "throughster",
-    "rapidfuzz>=3.13.0",
+    "rouge-score>=0.1.2",
+    "qdrant-client>=1.4.0",
+    "grpcio-tools>=1.60",
+    "fastembed>=0.6.1",
+    "ranx>=0.3.20",
+    "sentence-transformers>=4.1.0",
+    "blake3>=1.0.4",
+    "cbor2>=5.6.5",
 ]
 
 [dependency-groups]
+trie = [
+    "pyahocorasick>=2.1.0",
+    "rapidfuzz>=3.13.0",
+]
+
+segmenter = [
+    "spacy>=2.2.0,<4.0.0",
+    "intervaltree>=3.1.0"
+]
+
 dataloader = [
     "datasets>=3.3.2",
     "polars>=1.15.0",
-    "intervaltree>=3.1.0",
-    "spacy>=2.2.0,<4.0.0",
 ]
 
 dev = [
@@ -56,19 +63,23 @@ frontend = [
     "flask[async]>=3.0.3",
     "gunicorn>=22.0.0",
 ]
-gpu = [
+training = [
+    "transformers>=4.48.3",
+    "lightning>=2.1.3",
     "bitsandbytes>=0.43.2",
     "flash-attn>=2.6.3",
-    "xformers>=0.0.28.post3",
-    "unsloth==2025.3.8",
-    "unsloth_zoo>=2025.3.7",
-    "trl==0.15.2",
+    # "xformers>=0.0.28.post3",
+    # "unsloth==2025.3.8",
+    # "unsloth_zoo>=2025.3.7",
+    # "trl==0.15.2",
     "vllm==0.7.3",
+    "peft>=0.14.0",
+    "outlines>=0.1.11",
     "diffusers>=0.32.2"
 ]
 
 [tool.uv]
-default-groups = ["dev", "dataloader", "test"]
+default-groups = ["dev", "dataloader", "test", "trie", "segmenter"]
 no-build-isolation-package = ["flash-attn", "xformers"]
 
 [tool.uv.sources]
@@ -124,25 +135,6 @@ select = [
     "ERA",
     "PGH",
 ]
-# ignore = [
-#     "F821",
-#     "F841",
-#     "D100",
-#     "D107",
-#     "D211",
-#     "D212",
-#     "S301",
-#     "S311",
-#     "S603",
-#     "S605",
-#     "S607",
-#     "B008",
-#     "B028",
-#     "B905",
-#     "COM812",
-#     "ISC001",
-#     "TC003",
-# ]
 exclude = [
     ".bzr", ".direnv", ".eggs", ".git", ".hg", ".mypy_cache", ".nox", ".pants.d", ".pytype", ".ruff_cache", ".svn",
     ".tox", ".venv", "__pypackages__", "_build", "buck-out", "build", "dist", "node_modules", "venv",

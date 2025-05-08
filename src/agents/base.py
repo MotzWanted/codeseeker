@@ -1,5 +1,4 @@
 from abc import abstractmethod
-import asyncio
 from collections import defaultdict
 import json
 from pathlib import Path
@@ -10,16 +9,11 @@ from jinja2 import Environment, FileSystemLoader
 import numpy as np
 from prompt_poet import Prompt
 
-import pydantic
-from throughster.base import ModelInterface
+from throughster.base import ModelInterface, BaseResponse
 from throughster.hf_datasets import HfOperation
 
-from trie.base import Trie
 
 PATH_TO_TEMPLATES = Path(__file__).parent / "templates"
-
-InputModel = typ.TypeVar("InputModel", bound=pydantic.BaseModel)
-OutputModel = typ.TypeVar("OutputModel", bound=pydantic.BaseModel)
 
 
 def custom_tojson(value):
@@ -61,18 +55,17 @@ def matrix2list(sparse_matrix: np.ndarray) -> list:
     return alignment_indices
 
 
-class HfBaseAgent(HfOperation, typ.Generic[InputModel, OutputModel]):
+class HfBaseAgent(HfOperation):
     """Base class for coding agents."""
 
     def __init__(
         self,
-        trie: Trie,
         init_client_fn: typ.Callable[..., ModelInterface],
         prompt_name: str,
         seed: int,
         sampling_params: dict[str, typ.Any],
+        max_retries: int = 5,
     ):
-        self.trie: Trie = trie
         self.init_client_fn = init_client_fn
         env = Environment(loader=FileSystemLoader(PATH_TO_TEMPLATES), autoescape=False)
         loader = typ.cast(FileSystemLoader, env.loader)
@@ -82,6 +75,14 @@ class HfBaseAgent(HfOperation, typ.Generic[InputModel, OutputModel]):
         self.prompt_name = prompt_name
         self.seed = seed
         self.sampling_params = sampling_params
+        self.max_retries = max_retries
+        self._client: ModelInterface | None = None
+
+    @property
+    def client(self) -> ModelInterface:
+        if self._client is None:
+            self._client = self.init_client_fn()
+        return self._client
 
     def format_request(self, **kwargs) -> dict[str, typ.Any]:
         """Format the prompt."""
@@ -94,7 +95,6 @@ class HfBaseAgent(HfOperation, typ.Generic[InputModel, OutputModel]):
             "prompt": prompt if self.client.endpoint == "completions" else None,
             "messages": prompt if self.client.endpoint == "chat/completions" else None,
             "seed": self.seed,
-            "max_tokens": 5000,
             **self.sampling_params,
         }
 
@@ -112,17 +112,26 @@ class HfBaseAgent(HfOperation, typ.Generic[InputModel, OutputModel]):
         """Process a row of agent tasks from a HuggingFace datasets.map()."""
         batch_size = len(batch[list(batch.keys())[0]])
 
-        batch_rows: list[InputModel] = [
-            self._format_input({key: value[i] for key, value in batch.items()})
+        batch_rows: list[dict[str, typ.Any]] = [
+            self.format_request(
+                **self._validate_input({key: value[i] for key, value in batch.items()})
+            )
             for i in range(batch_size)
         ]
 
-        responses = asyncio.run(self._async_call_wrapper(batch_rows))
+        responses = self.batch_call(batch_rows)
 
         output = defaultdict(list)
-        for i, r in enumerate(responses):
-            output_data = r.model_dump()
-            for key, value in output_data.items():
+        for resp in responses:
+            if isinstance(resp, Exception):
+                raise resp
+            try:
+                resp_dict = self.parser(resp.choices[0].content)
+            except Exception:
+                raise ValueError(
+                    f"Failed to parse response: {resp.choices[0].content}"
+                ) from None
+            for key, value in resp_dict.items():
                 output[key].append(value)
 
         return {
@@ -130,18 +139,18 @@ class HfBaseAgent(HfOperation, typ.Generic[InputModel, OutputModel]):
             **output,
         }
 
-    async def _async_call_wrapper(
-        self, batch_rows: list[InputModel]
-    ) -> list[OutputModel]:
-        """Handle a batch of alignment tasks."""
-        return await asyncio.gather(*[self.predict(row) for row in batch_rows])
+    def batch_call(self, requests: list[dict[str, typ.Any]]) -> list[BaseResponse]:
+        """Async wrapper for the translation operation."""
+        return self.client.sync_structured_batch_call(
+            requests, self.parser, self.max_retries
+        )
 
     @abstractmethod
-    def _format_input(self, row: dict[str, typ.Any]) -> InputModel:
+    def _validate_input(self, row: dict[str, typ.Any]) -> dict[str, typ.Any]:
         """Format the input."""
         ...
 
     @abstractmethod
-    async def predict(self, *args, **kwargs) -> OutputModel:
-        """Handle a batch of agent tasks."""
+    def parser(self, str) -> dict[str, typ.Any]:
+        """Condition for parsing the response."""
         ...

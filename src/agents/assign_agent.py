@@ -76,22 +76,28 @@ class MockAssignAgent(HfBaseAgent):
         request["max_tokens"] = 1
         await self.client.call(request=request)
 
-    async def predict(self, inputs: list[InputModel]) -> OutputModel:
+    async def predict(self, input_data: list[InputModel]) -> OutputModel:
         """Handle a batch of alignment tasks."""
-        if len(inputs) > 1:
-            await self._warmup(inputs[0])
-        requests = [self.format_request(**el.model_dump()) for el in inputs]
+        if len(input_data) > 1:
+            await self._warmup(input_data[0])
+        requests = [self.format_request(**el.model_dump()) for el in input_data]
         responses: list[BaseResponse] = await self.client.batch_call(requests=requests)
         response = ""
         predictions = set()
 
         for idx, resp in enumerate(responses):
-            pred, reasoning = self.compress_choices(resp.choices)
-            predictions.update([inputs[idx].codes[i - 1].name for i in pred])
+            preds, reasoning = self.compress_choices(resp.choices)
+            predictions.update(
+                [
+                    input_data[idx].codes[i - 1].name
+                    for i in preds
+                    if 0 < i <= len(input_data[idx].codes)
+                ]
+            )
             response += reasoning + "\n\n"
 
         return OutputModel(
-            codes=[code.name for sublist in inputs for code in sublist.codes],
+            codes=[code.name for sublist in input_data for code in sublist.codes],
             predictions=list(predictions),
             response=response.strip(),
         )
@@ -155,7 +161,8 @@ class MockAssignAgent(HfBaseAgent):
     def compress_choices(self, choices: list[ResponseChoice]) -> tuple[list[int], str]:
         """Compress the choices."""
         c = choices[0]
-        answer_match = re.search(ANSWER_PATTERN, c.content)
+        c.content = c.content.replace("IDs:", "").replace("ID:", "")
+        answer_match = re.search(ANSWER_PATTERN, c.content, re.DOTALL)
         preds = (
             [int(num.strip()) for num in answer_match.group(1).split(",")]
             if answer_match
@@ -167,65 +174,23 @@ class MockAssignAgent(HfBaseAgent):
             )
         return preds, c.content
 
-    @staticmethod
-    def sample_negatives(
-        negatives: list[list[str]],
-        positives: list[str],
-        per_positive: int,
-        seed: int | str = 42,
-    ) -> list[str]:
-        # Ensure the total number of samples does not exceed 50
-        negatives_to_sample = len(positives) * per_positive
-        if negatives_to_sample == 0:
-            return []
-        rng = np.random.RandomState(int(seed))
-        # Step 1: Determine the initial fair share per sublist
-        num_sublists = len(negatives)
-        if num_sublists == 0:
-            raise ValueError("No negatives to sample from")
-        base_samples_per_sublist = negatives_to_sample // num_sublists
-        remainder = negatives_to_sample % num_sublists  # Leftover samples
 
-        selected_negatives = []
-        remaining_negatives = negatives_to_sample
+class MockAssignAgentStructured(MockAssignAgent):
+    """A structured assign agent that simulates the candidate space."""
 
-        # Step 2: Assign samples as evenly as possible
-        for i, sublist in enumerate(sorted(negatives)):
-            if remaining_negatives <= 0:
-                break
-            positive_set = set(positives)
-            selected_set = set(selected_negatives)
+    CODE_LIST = r"(?:[1-9]\d{0,3})(?:,(?:[1-9]\d{0,3})){0,19}\n"
 
-            unique_sublist = [
-                code
-                for code in sublist
-                if code not in positive_set and code not in selected_set
-            ]
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sampling_params["guided_regex"] = self.CODE_LIST
 
-            if len(unique_sublist) == 0:
-                continue
+    def compress_choices(self, choices: list[ResponseChoice]) -> tuple[list[int], str]:
+        """Compress the choices into a single."""
+        c = choices[0]
+        # match comma separated list of integers with regex
+        preds = [int(num.strip()) for num in c.content.split(",")]
 
-            indices = np.arange(len(unique_sublist))
-            weights = np.exp(-0.5 * indices)  # Exponential decay
-            weights /= weights.sum()  # Normalize to get probabilities
-
-            num_to_sample = min(
-                len(unique_sublist),
-                base_samples_per_sublist + (1 if i < remainder else 0),
-            )
-            sampled = rng.choice(
-                unique_sublist, size=num_to_sample, replace=False, p=weights
-            ).tolist()
-
-            selected_negatives.extend(sampled)
-            remaining_negatives -= len(sampled)
-
-        if len(selected_negatives) != negatives_to_sample:
-            raise ValueError(
-                f"Sampled {len(selected_negatives)} negatives, but expected {negatives_to_sample}"
-            )
-
-        return selected_negatives
+        return preds, ""
 
 
 def create_assign_agent(
@@ -252,6 +217,14 @@ def create_assign_agent(
             seed=seed,
             sampling_params=sampling_params,
             per_code=True,
+        )
+    elif agent_type == "mock-structured":
+        return partial(
+            MockAssignAgentStructured,
+            prompt_name=prompt_name,
+            seed=seed,
+            sampling_params=sampling_params,
+            per_code=False,
         )
     else:
         raise ValueError(f"Unsupported agent type: {agent_type}")

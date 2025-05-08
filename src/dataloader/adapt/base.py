@@ -19,27 +19,44 @@ class CodeModel(pydantic.BaseModel):
     chapter_id: str
     etiology: bool
     manifestation: bool
-    inclusion_term: list[str] = pydantic.Field(default=[], description="Inclusion terms.")
+    inclusion_term: list[str] = pydantic.Field(
+        default=[], description="Inclusion terms."
+    )
     excludes1: list[str] = pydantic.Field(default=[], description="Excludes1 codes.")
     excludes2: list[str] = pydantic.Field(default=[], description="Excludes2 codes.")
     code_first: list[str] = pydantic.Field(default=[], description="Code first.")
     code_also: list[str] = pydantic.Field(default=[], description="Code also.")
-    use_additional_code: list[str] = pydantic.Field(default=[], description="Use additional code.")
+    use_additional_code: list[str] = pydantic.Field(
+        default=[], description="Use additional code."
+    )
 
 
 class GuidelinesModel(pydantic.BaseModel):
     """Model for guidelines."""
 
     code: str
-    notes: list[str] = pydantic.Field(default=[], description="Notes on a code or category.")
+    notes: list[str] = pydantic.Field(
+        default=[], description="Notes on a code or category."
+    )
     includes: list[str] = pydantic.Field(default=[], description="Includes codes.")
     excludes1: list[str] = pydantic.Field(default=[], description="Excludes1 codes.")
     excludes2: list[str] = pydantic.Field(default=[], description="Excludes2 codes.")
-    use_additional_code: list[str] = pydantic.Field(default=[], description="Use additional code.")
+    use_additional_code: list[str] = pydantic.Field(
+        default=[], description="Use additional code."
+    )
     code_first: list[str] = pydantic.Field(default=[], description="Code first.")
     code_also: list[str] = pydantic.Field(default=[], description="Code also.")
-    inclusion_term: list[str] = pydantic.Field(default=[], description="Inclusion terms.")
-    assignable: bool = pydantic.Field(default=False, description="Is the code assignable?")
+    inclusion_term: list[str] = pydantic.Field(
+        default=[], description="Inclusion terms."
+    )
+    assignable: bool = pydantic.Field(
+        default=False, description="Is the code assignable?"
+    )
+
+
+class EvidenceSpan(pydantic.BaseModel):
+    code: str
+    locations: list[tuple[int, int]]
 
 
 class BaseModel(pydantic.BaseModel):
@@ -47,7 +64,9 @@ class BaseModel(pydantic.BaseModel):
 
     aid: str
     note: str
+    note_type: str | None = None
     targets: list[str]
+    evidence_spans: list[EvidenceSpan] | None = None
 
 
 # class LegacyBaseModel(pydantic.BaseModel):
@@ -80,7 +99,9 @@ class AsDict:
     """A callable that converts a pydantic model to a dict."""
 
     def __init__(
-        self, fn: typ.Callable[[DictStrKey, DatasetOptions], pydantic.BaseModel], options: DatasetOptions
+        self,
+        fn: typ.Callable[[DictStrKey, DatasetOptions], pydantic.BaseModel],
+        options: DatasetOptions,
     ) -> None:
         self.fn = fn
         self.options = options
@@ -112,7 +133,9 @@ class Adapter(typ.Generic[Im, Om], abc.ABC):
         raise NotImplementedError(f"{cls.__name__} does not implement `translate_row`")
 
     @classmethod
-    def translate_dset(cls, dset: datasets.Dataset, options: DatasetOptions, **kwargs: typ.Any) -> datasets.Dataset:
+    def translate_dset(
+        cls, dset: datasets.Dataset, options: DatasetOptions, **kwargs: typ.Any
+    ) -> datasets.Dataset:
         """Translating a dataset."""
         return dset.map(
             AsDict(cls.translate_row, options),

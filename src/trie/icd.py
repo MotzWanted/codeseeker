@@ -64,7 +64,7 @@ class ICD10Trie(Trie):
 
     def parse_tabular_files(self) -> None:
         """Parse the tabular files."""
-        pcs_tabular_root: ET.Element = ET.parse(self.files_map.pcs_tabular).getroot()
+        pcs_tabular_root: ET.Element = ET.parse(self.files_map.pcs_tabular).getroot()  # type: ignore
         cm_tabular_root: ET.Element = ET.parse(self.files_map.cm_tabular).getroot()
 
         pcs_data: list[models.PcsTable] = xml_utils.parse_pcs_tables(pcs_tabular_root)
@@ -102,7 +102,6 @@ class ICD10Trie(Trie):
             if isinstance(term.code, list):
                 tmp_node = models.Term(
                     id=parent_id,
-                    assignable=term.assignable,
                     title=term.title,
                     code=None,
                     see=term.see,
@@ -113,9 +112,9 @@ class ICD10Trie(Trie):
             else:
                 tmp_node = models.Term(
                     id=parent_id,
-                    assignable=term.assignable,
                     title=term.title,
                     code=term.code,
+                    manifestation_code=term.manifestation_code,
                     see=term.see,
                     see_also=term.see_also,
                     parent_id="",
@@ -133,7 +132,6 @@ class ICD10Trie(Trie):
             if isinstance(term.code, list):
                 tmp_node = models.Term(
                     id=current_id,
-                    assignable=term.assignable,
                     title=term.title,
                     code=None,
                     see=term.see,
@@ -144,9 +142,9 @@ class ICD10Trie(Trie):
             else:
                 tmp_node = models.Term(
                     id=current_id,
-                    assignable=term.assignable,
                     title=term.title,
                     code=term.code,
+                    manifestation_code=term.manifestation_code,
                     see=term.see,
                     see_also=term.see_also,
                     parent_id=parent_id,
@@ -162,7 +160,7 @@ class ICD10Trie(Trie):
             models.Term(
                 id=term.id + "X" + str(cell.col),
                 assignable=cell.assignable,
-                title=f"{term.title} ({cell.heading})",
+                title=f"{cell.heading}",
                 code=cell.code,
                 parent_id=term.id,
             )
@@ -184,7 +182,7 @@ class ICD10Trie(Trie):
         """ "Insert PCS tables into the trie."""
         root = models.Root(id="pcs", name="pcs", min="1", max=str(len(tables)))
         self.roots.append(root.id)
-        self.tabular[root.id] = root
+        self.tabular[root.id] = root  # type: ignore
 
         for table_index, table in track(
             enumerate(tables, start=1),
@@ -277,7 +275,7 @@ class ICD10Trie(Trie):
         """Insert CM chapters into the trie."""
         root = models.Root(id="cm", name="cm", min="1", max=str(len(chapters)))
         self.roots.append(root.id)
-        self.tabular[root.id] = root
+        self.tabular[root.id] = root  # type: ignore
         self.lookup[root.name] = root.id
 
         for ch in track(chapters, description="Parsing ICD-10-CM chapters"):
@@ -377,3 +375,9 @@ if __name__ == "__main__":
     test_term = "00001"
     term_codes = xml_trie.get_all_term_codes(test_term)
     print(f"Term {test_term} has a total of {len(term_codes)} codes.")
+    sub_terms = xml_trie.get_all_term_children(test_term)
+    print(f"Term {test_term} has a total of {len(sub_terms)} sub-terms.")
+
+    queries = ["neoplasm", "hypertension", "croissant"]
+    search_results = xml_trie.find_terms(queries, main_terms=False)
+    print(f"Search results {search_results}:")

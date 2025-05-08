@@ -178,6 +178,8 @@ def parse_icd10_index_term(
     code: str | list[models.CmCell] | None = (
         cells if cells else (element.findtext("code") or None)
     )
+    # Extract manifestation code if present
+    manifestation_code = element.findtext("manif")
 
     see = element.findtext("see")
     see_also = element.findtext("seeAlso")
@@ -189,7 +191,12 @@ def parse_icd10_index_term(
     ]
 
     return models.CmIndexTerm(
-        title=title, code=code, see=see, see_also=see_also, sub_terms=sub_terms
+        title=title,
+        code=code,
+        manifestation_code=manifestation_code,
+        see=see,
+        see_also=see_also,
+        sub_terms=sub_terms,
     )
 
 
