@@ -84,7 +84,7 @@ class PLMICDModel(PreTrainedModel):
         if config.output_activation == "sigmoid":
             self.output_activation_fn = torch.sigmoid
         elif config.output_activation == "softmax":
-            self.output_activation_fn = lambda x: torch.softmax(x, dim=-1)
+            self.output_activation_fn = torch.softmax
 
     def save_pretrained(self, save_directory, **kwargs):
         """Save configuration and model's state_dict to the directory."""
@@ -133,9 +133,6 @@ class PLMICDModel(PreTrainedModel):
             chunk_attention_mask.view(-1, chunk_size), 0, relevant_chunk_indices
         )
 
-        device = (
-            self.encoder.device if self.encoder is not None else torch.device("cpu")
-        )
         if self.encoder is None:
             raise ValueError("Encoder is not initialized")
 
@@ -147,7 +144,7 @@ class PLMICDModel(PreTrainedModel):
         # Set outputs for padding chunks to zero vector
         outputs_with_padding_chunks = torch.zeros(
             (batch_size * chunk_input_ids.size(1), chunk_size, outputs.size(-1)),
-            device=device,
+            device=self.encoder.device,
             dtype=outputs.dtype,
         )
         out = outputs_with_padding_chunks.index_copy_(
@@ -190,7 +187,7 @@ class PLMICDModel(PreTrainedModel):
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor, **kwargs
     ) -> torch.Tensor:
         logits = self(input_ids, attention_mask)["logits"]
-        return self.output_activation_fn(logits)
+        return self.output_activation_fn(logits)  # type: ignore
 
     def split_input_into_chunks(
         self, input_sequence: torch.Tensor, pad_index: int

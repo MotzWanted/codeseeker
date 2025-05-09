@@ -19,7 +19,8 @@ class BaseArguments(BaseSettings):
 
     provider: str = "vllm"  # "azure" | "vllm" | "mistral"
     api_base: str
-    deployment: str
+    deployment: str | None = None
+    pretrained_model_path: str | None = None
     endpoint: typ.Literal["chat/completions", "completions"] = "completions"
     use_cache: bool = True  # whether to cache on request level
 
@@ -36,7 +37,7 @@ class BaseArguments(BaseSettings):
     @pydantic.computed_field
     def _deployment_name(self) -> str:
         """Get the model name."""
-        return self.deployment.split("/")[-1]
+        return self.deployment.split("/")[-1] if self.deployment else f"{self.pretrained_model_path[1:-1].replace("/", "-")}/"
 
     @pydantic.computed_field
     def _hash(self) -> str:
