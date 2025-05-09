@@ -1,4 +1,6 @@
 from collections import defaultdict
+from functools import partial
+import pathlib
 import typing
 
 import datasets
@@ -11,6 +13,7 @@ from intervaltree import IntervalTree
 from rouge_score import rouge_scorer
 
 from trie.icd import ICD10Trie
+from throughster.factory import create_interface
 
 
 def _build_ground_truth(evidence_spans: list[dict], note: str) -> IntervalTree:
@@ -126,6 +129,13 @@ def build_icd_trie(year: int = 2022) -> ICD10Trie:
     return trie
 
 
+def _get_dataset(dset: datasets.Dataset | datasets.DatasetDict) -> datasets.Dataset:
+    """Get a `datasets.Dataset`."""
+    if isinstance(dset, datasets.Dataset):
+        return dset
+    return next(iter(dset.values()))
+
+
 def analyse_agent_metrics(
     eval_data: list[dict[str, typing.Any]],
     xml_trie: Trie,
@@ -194,3 +204,22 @@ def analyse_agent_metrics(
         rich.print(f"  Terms per lead: {metrics_results[f'terms_per_lead@{k}']:.4f}")
 
     return metrics_results
+
+
+def _init_client_fn(
+    provider: str,
+    api_base: str,
+    endpoint: str,
+    deployment: str,
+    use_cache: bool,
+    **kwargs,
+) -> typing.Callable:
+    return partial(
+        create_interface,
+        provider=provider,
+        api_base=api_base,
+        endpoint=endpoint,
+        model_name=deployment,
+        use_cache=use_cache,
+        cache_dir=str(pathlib.Path(f"~/.cache/throughster/{deployment}").expanduser()),
+    )

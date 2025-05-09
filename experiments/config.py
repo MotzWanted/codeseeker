@@ -1,12 +1,9 @@
 from collections import OrderedDict
-from functools import partial
 import hashlib
 import pathlib
 import typing as typ
-import datasets
 import pydantic
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from throughster.factory import create_interface
 import torch
 
 from finetune.monitor import ClassAggregator, MeanAggregator, Monitor
@@ -86,32 +83,6 @@ class BaseArguments(BaseSettings):
             if ":" in self.prompt_name
             else [self.prompt_name]
         )
-
-
-def _get_dataset(dset: datasets.Dataset | datasets.DatasetDict) -> datasets.Dataset:
-    """Get a `datasets.Dataset`."""
-    if isinstance(dset, datasets.Dataset):
-        return dset
-    return next(iter(dset.values()))
-
-
-def _init_client_fn(
-    provider: str,
-    api_base: str,
-    endpoint: str,
-    deployment: str,
-    use_cache: bool,
-    **kwargs,
-) -> typ.Callable:
-    return partial(
-        create_interface,
-        provider=provider,
-        api_base=api_base,
-        endpoint=endpoint,
-        model_name=deployment,
-        use_cache=use_cache,
-        cache_dir=str(pathlib.Path(f"~/.cache/throughster/{deployment}").expanduser()),
-    )
 
 
 def list2tensor_vectorized(

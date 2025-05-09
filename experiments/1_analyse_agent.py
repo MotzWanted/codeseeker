@@ -21,9 +21,9 @@ import datasets
 from dataloader import load_dataset, DATASET_CONFIGS
 
 import utils as exp_utils
-from search.qdrant_search import client as qdrant_client
-from search.qdrant_search import models as qdrant_models
-from search.qdrant_search import factory as qdrant_factory
+from retrieval.qdrant_search import client as qdrant_client
+from retrieval.qdrant_search import models as qdrant_models
+from retrieval.qdrant_search import factory as qdrant_factory
 
 
 class Arguments(pydantic.BaseModel):
@@ -31,8 +31,8 @@ class Arguments(pydantic.BaseModel):
     provider: str = "vllm"  # "azure" | "vllm" | "mistral"
     embed_model: dict[str, typ.Any] = {
         "provider": "vllm",
-        "deployment": "infly/inf-retriever-v1",
-        "api_base": "http://localhost:6536/v1",
+        "deployment": "BAAI/bge-multilingual-gemma2",
+        "api_base": "http://localhost:6537/v1",
         "endpoint": "embeddings",
         "use_cache": True,
     }
@@ -55,30 +55,15 @@ class Arguments(pydantic.BaseModel):
     num_workers: int = 4
     topk_lead_terms: int = 500
     topk_assignable_terms: int = 100
-
-    lead_embedding_config: list[dict[str, str]] = [
-        {
-            "type": "st",
-            "model_name": "pritamdeka/S-PubMedBert-MS-MARCO",
-            "query_key": "output",
-        },
-        {
-            "type": "custom",
-            "model_name": "infly/inf-retriever-v1",
-            "dim": "3584",
-            "query_key": "embedding",
-        },
-        {"type": "sparse", "model_name": "Qdrant/bm25", "query_key": "output"},
-    ]
-    modifier_embed_config: list[dict[str, str]] = [
-        {
-            "type": "st",
-            "model_name": "pritamdeka/S-PubMedBert-MS-MARCO",
-            "query_key": "output",
-        },
+    embed_config: list[dict[str, str]] = [
+        # {
+        #     "type": "st",
+        #     "model_name": "abhinand/MedEmbed-large-v0.1",
+        #     "query_key": "output",
+        # },
         {
             "type": "custom",
-            "model_name": "infly/inf-retriever-v1",
+            "model_name": "BAAI/bge-multilingual-gemma2",
             "dim": "3584",
             "query_key": "output_prompt",
         },
@@ -140,13 +125,11 @@ def run(args: Arguments) -> datasets.Dataset:
 
     client = HfEmbeddingClient(
         prompt_key="path",
-        init_client_fn=cnf._init_client_fn(**args.embed_model),
+        init_client_fn=exp_utils._init_client_fn(**args.embed_model),
     )
     qdrant_service = qdrant_client.QdrantSearchService(
         **args.qdrant_config.model_dump()
     )
-
-    ######### 0. RETRIEVE TOP K LEAD TERMS BASED ON NOTES #########
 
     xml_trie = exp_utils.build_icd_trie(year=2022)
     lead_terms = xml_trie.get_all_main_terms()
@@ -166,17 +149,6 @@ def run(args: Arguments) -> datasets.Dataset:
     mdace = load_dataset(DatasetConfig(**DATASET_CONFIGS["mdace-icd10cm"]))
     mdace = exp_utils.format_dataset(mdace, xml_trie)
 
-    ##### 1. RETRIEVE TOP K LEAD TERMS BASED ON LLM-GENERATED TERMS #####
-    # index_finger_print = qdrant_factory.ensure_qdrant_index(
-    #     data=terms_dset.to_list(),
-    #     text_key="path",
-    #     model_cfg=args.lead_embedding_config,
-    #     hnsw_cfg=args.hnsw,
-    #     distance=args.distance,
-    #     service=qdrant_service,
-    #     payload_keys=["id"],
-    # )
-
     agent = create_analyse_agent(
         agent_type=args.agent_type,
         prompt_name=args.prompt_name,
@@ -191,7 +163,7 @@ def run(args: Arguments) -> datasets.Dataset:
     )
 
     task_maker = agent(
-        init_client_fn=cnf._init_client_fn(**args.reasoning_model),
+        init_client_fn=exp_utils._init_client_fn(**args.reasoning_model),
         seed=args.seed,
     )
 
@@ -200,7 +172,7 @@ def run(args: Arguments) -> datasets.Dataset:
         num_proc=args.num_workers,
         batched=True,
         batch_size=args.batch_size,
-        remove_columns=cnf._get_dataset(mdace).column_names,
+        remove_columns=exp_utils._get_dataset(mdace).column_names,
         desc=f"Generating search queries for seed {args.seed}.",
         load_from_cache_file=False,
     )
@@ -224,41 +196,11 @@ def run(args: Arguments) -> datasets.Dataset:
         num_proc=args.num_workers,
         batched=True,
         batch_size=1024,
-        remove_columns=cnf._get_dataset(mdace).column_names,
+        remove_columns=exp_utils._get_dataset(mdace).column_names,
         desc="Embedding LLM-generated terms for retrieval.",
         load_from_cache_file=False,
     )
 
-    # lead_term_results = qdrant_factory.search(
-    #     data=mdace.to_list(),
-    #     model_cfg=args.lead_embedding_config,
-    #     service=qdrant_service,
-    #     index_name=index_finger_print,
-    #     limit=max(args.ranks),
-    # )
-
-    # top_k_lead_terms = [
-    #     [
-    #         xml_trie.index[p.payload["id"]].model_dump()
-    #         for p in res.points[: args.topk_lead_terms]
-    #         if p.payload
-    #     ]
-    #     for res in lead_term_results
-    # ]
-
-    # eval_data = format_eval_data(mdace, lead_term_results)
-
-    # metrics = exp_utils.analyse_agent_metrics(eval_data.to_list(), xml_trie, args.ranks)
-    # logger.info(f"Dumping retrieval results to {args.get_experiment_folder()}")
-    # with open(args.get_experiment_folder() / "lead_term_results.json", "w") as f:  # type: ignore
-    #     json.dump({"metrics": metrics}, f, indent=2)
-
-    ##### 2. RETRIEVE ASSIGNABLE TERMS BASED ON LLM-GENERATED TERMS #####
-    # logger.info(f"Filtering top {args.topk_lead_terms} lead terms.")
-    # top_lead_terms = {
-    #     lead["id"]: lead for retrieved in mdace["terms"] for lead in retrieved
-    # }
-    # logger.info(f"Fetching sub terms for `{len(top_lead_terms)}` lead terms.")
     assignable_terms = [term.model_dump() for term in xml_trie.get_assignable_terms()]
     assignable_terms.sort(key=lambda x: x["id"])
     logger.info(f"Fetched `{len(assignable_terms)}` assignable terms.")
@@ -278,7 +220,7 @@ def run(args: Arguments) -> datasets.Dataset:
     index_finger_print = qdrant_factory.ensure_qdrant_index(
         data=assignable_terms_index.to_list(),
         text_key="path",
-        model_cfg=args.modifier_embed_config,
+        model_cfg=args.embed_config,
         hnsw_cfg=args.hnsw,
         distance=args.distance,
         service=qdrant_service,
@@ -287,7 +229,7 @@ def run(args: Arguments) -> datasets.Dataset:
 
     assignable_terms_results = qdrant_factory.search(
         data=mdace.to_list(),
-        model_cfg=args.modifier_embed_config,
+        model_cfg=args.embed_config,
         service=qdrant_service,
         index_name=index_finger_print,
         limit=max(args.ranks),

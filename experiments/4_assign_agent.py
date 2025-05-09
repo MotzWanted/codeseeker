@@ -10,11 +10,12 @@ import torch
 from agents.assign_agent import create_assign_agent
 import dataloader
 from dataloader.base import DatasetConfig
-import config as cnf
+import utils as exp_utils
+import config as exp_config
 from trie.icd import ICD10Trie
 
 
-class Arguments(cnf.BaseArguments):
+class Arguments(exp_config.BaseArguments):
     """Args for the script."""
 
     experiment_id: str = "assign-agent"
@@ -70,7 +71,7 @@ def run(args: Arguments):
             "num_proc": args.num_workers,
         }
         dset = dataloader.load_dataset(dset_config)
-        dset = cnf.format_dataset(dset, xml_trie, args.debug)
+        dset = exp_utils.format_dataset(dset, xml_trie, args.debug)
         logger.info(f"Running {dataset} with seeds `{args._seeds}`.")
         for prompt_name in args._prompts:  # type: ignore
             for num_negs in args._negatives:  # type: ignore
@@ -86,7 +87,7 @@ def run(args: Arguments):
                         },
                     )
                     task_maker = agent(
-                        init_client_fn=cnf._init_client_fn(**args.model_dump()),
+                        init_client_fn=exp_utils._init_client_fn(**args.model_dump()),
                         trie=xml_trie,
                         n_samples=num_negs,
                     )
@@ -96,7 +97,7 @@ def run(args: Arguments):
                         batched=True,
                         batch_size=args.batch_size,
                         desc=f"Predicting with seed `{seed}`.",
-                        remove_columns=cnf._get_dataset(dset).column_names,
+                        remove_columns=exp_utils._get_dataset(dset).column_names,
                         load_from_cache_file=False,
                     )
 
@@ -110,7 +111,7 @@ def run(args: Arguments):
                         }
                     )
 
-                    monitor = cnf.TrieClassificationMonitor(trie=trie)
+                    monitor = exp_config.TrieClassificationMonitor(trie=trie)
                     monitor.update(
                         target_inputs=eval_data["targets"],
                         pred_inputs=eval_data["predictions"],
@@ -122,7 +123,7 @@ def run(args: Arguments):
                     }
                     rich.print(f"[yellow]{metrics}[/yellow]")
                     save_folder = (
-                        cnf.DUMP_FOLDER
+                        exp_config.DUMP_FOLDER
                         / str(args.experiment_folder)
                         / dataset
                         / f"{prompt_name}_neg{str(num_negs)}_seed{str(seed)}"
@@ -132,7 +133,7 @@ def run(args: Arguments):
                     save_folder.mkdir(parents=True, exist_ok=True)
                     with open(save_folder / "responses.json", "w") as f:
                         cols_to_remove = set(
-                            cnf._get_dataset(eval_data).column_names
+                            exp_utils._get_dataset(eval_data).column_names
                         ) - set(
                             ["aid", "note_type", "predictions", "targets", "response"]
                         )

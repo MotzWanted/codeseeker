@@ -8,30 +8,12 @@ from loguru import logger
 
 from prompt_poet import Prompt
 from jinja2 import Environment, FileSystemLoader
-import pydantic
 from throughster.base import ModelInterface
 from throughster.core.models import ResponseChoice, BaseResponse
 from throughster.hf_datasets import HfOperation
 
 from agents.base import PATH_TO_TEMPLATES, custom_tojson
 from trie.base import Trie
-from trie import models
-
-
-class InputModel(pydantic.BaseModel):
-    """Input model for the Locate Agent."""
-
-    note: str
-    terms: list[models.Term]
-
-
-class OutputModel(pydantic.BaseModel):
-    """Output model for the Locate Agent."""
-
-    terms: list[models.Term]
-    codes: list[models.Code]
-    evidence: list[tuple[str, str]] | None = None
-    response: str | None = None
 
 
 class HfLocateAgent(HfOperation):
@@ -39,13 +21,19 @@ class HfLocateAgent(HfOperation):
         self.trie: Trie = trie
         self.init_client_fn = init_client_fn
 
-    def __call__(self, batch: dict[str, list[typ.Any]], *args, **kwargs) -> dict[str, list[typ.Any]]:
+    def __call__(
+        self, batch: dict[str, list[typ.Any]], *args, **kwargs
+    ) -> dict[str, list[typ.Any]]:
         """Process a row of alignment tasks from a HuggingFace datasets.map()."""
         batch_size = len(batch[list(batch.keys())[0]])
 
         main_terms = self.trie.get_all_main_terms()
-        batch_rows = [{key: value[i] for key, value in batch.items()} for i in range(batch_size)]
-        batch_rows = [self._format_input({**row, "terms": main_terms}) for row in batch_rows]
+        batch_rows = [
+            {key: value[i] for key, value in batch.items()} for i in range(batch_size)
+        ]
+        batch_rows = [
+            self._format_input({**row, "terms": main_terms}) for row in batch_rows
+        ]
 
         responses = asyncio.run(*[self.predict(row) for row in batch_rows])
 
@@ -74,10 +62,19 @@ class HfLocateAgent(HfOperation):
 
 
 class LLMLocateAgent(HfLocateAgent):
-    def __init__(self, prompt_name: str, seed: int, sampling_params: dict[str, typ.Any], *args, **kwargs):
+    def __init__(
+        self,
+        prompt_name: str,
+        seed: int,
+        sampling_params: dict[str, typ.Any],
+        *args,
+        **kwargs,
+    ):
         env = Environment(loader=FileSystemLoader(PATH_TO_TEMPLATES), autoescape=False)
         loader = typ.cast(FileSystemLoader, env.loader)
-        self.raw_template, self.template_path, _ = loader.get_source(env, f"{prompt_name}.yml.j2")
+        self.raw_template, self.template_path, _ = loader.get_source(
+            env, f"{prompt_name}.yml.j2"
+        )
         self.prompt_name = prompt_name
         self.seed = seed
         self.sampling_params = sampling_params
@@ -117,7 +114,9 @@ class LLMLocateAgent(HfLocateAgent):
         }
 
     @staticmethod
-    def prompt_messages_or_string(client: ModelInterface, prompt: Prompt) -> str | list[dict[str, str]]:
+    def prompt_messages_or_string(
+        client: ModelInterface, prompt: Prompt
+    ) -> str | list[dict[str, str]]:
         if client.endpoint == "chat/completions":
             return prompt.messages
         return prompt.string
@@ -126,9 +125,15 @@ class LLMLocateAgent(HfLocateAgent):
         """Compress the choices."""
         c = choices[0]
         answer_match = re.search(self.ANSWER_PATTERN, c.content)
-        preds = [int(num.strip()) for num in answer_match.group(1).split(",")] if answer_match else []
+        preds = (
+            [int(num.strip()) for num in answer_match.group(1).split(",")]
+            if answer_match
+            else []
+        )
         if not preds:
-            logger.warning(f"Could not find any relevant tokens in the response: {c.content[-250:]}")
+            logger.warning(
+                f"Could not find any relevant tokens in the response: {c.content[-250:]}"
+            )
         return preds, c.content
 
 

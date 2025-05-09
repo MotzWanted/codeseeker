@@ -20,8 +20,8 @@ from grpc._channel import _InactiveRpcError
 from rich.progress import track
 from sentence_transformers import SentenceTransformer
 
-from search.qdrant_search.client import QdrantSearchService
-from search.qdrant_search.models import CollectionBody
+from retrieval.qdrant_search.client import QdrantSearchService
+from retrieval.qdrant_search.models import CollectionBody
 from throughster.factory import create_interface
 from throughster.base import ModelInterface
 
