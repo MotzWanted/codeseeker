@@ -35,12 +35,13 @@ class Arguments(BaseArguments):
     """Args for the script."""
 
     experiment_id: str = "locate-agent"
-    experiment_name: str = "long-context"
+    experiment_name: str = "pretrained-plmicd"
 
     api_base: str = "http://localhost:6538/v1"
-    deployment: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
 
+    agent_type: str = "plmicd"
     prompt_name: str = "locate_1"  # lookup in `src/alignment/templates`
+    pretrained_model_path: str = "/nfs/nas/databases/clu/saved_models/mimic-iv-mdace-eval/100k_steps/"
     temperature: float = 0.0
 
     dataset: str = "mdace-icd10cm"  # "mimic-iii-50" | "mimic-iv" | "mdace-icd10cm"
@@ -59,23 +60,34 @@ def run(args: Arguments):
         dset_config: DatasetConfig = DatasetConfig(**dataloader.DATASET_CONFIGS[dataset])
         dset_config.options.prep_map_kws = {"load_from_cache_file": False, "num_proc": args.num_workers}
         logger.info(f"Running {dataset} with seeds `{args._seeds}`.")
-        for prompt_name in args._prompts:
+        model_sources = args._prompts if args.agent_type == "long-context" else [args.pretrained_model_path]
+        for model_source in model_sources:
             for seed in args._seeds:
                 dset_config.options.seed = seed
                 dset = dataloader.load_dataset(dset_config)
                 if isinstance(dset, datasets.DatasetDict):
                     dset = datasets.concatenate_datasets(dset.values())
-                agent = create_locate_agent(
-                    agent_type="long-context",
-                    prompt_name=prompt_name,
-                    seed=seed,
-                    sampling_params={
-                        "temperature": args.temperature,
-                        "seed": seed,
-                    },
-                )
+                if args.agent_type == "long-context":
+                    agent = create_locate_agent(
+                        agent_type="long-context",
+                        prompt_name=model_source,
+                        seed=seed,
+                        sampling_params={
+                            "temperature": args.temperature,
+                            "seed": seed,
+                        },
+                    )
+                    task_maker = agent(init_client_fn=_init_client_fn(**args.model_dump()), trie=xml_trie)
+                elif args.agent_type == "plmicd":
+                    if args.num_workers > 1:
+                        raise ValueError("`num_workers` > 1 is not supported for `plmicd` agent; increase batch size instead.")
+                    agent = create_locate_agent(
+                        agent_type="plmicd",
+                        pretrained_model_path=model_source,
+                        seed=seed,
+                    )
+                    task_maker = agent(k=1000)
                 dset = dset.select(range(0, 10))
-                task_maker = agent(init_client_fn=_init_client_fn(**args.model_dump()), trie=xml_trie)
                 eval_data = dset.map(
                     task_maker,
                     num_proc=args.num_workers,
@@ -89,7 +101,7 @@ def run(args: Arguments):
                 precision, recall = precision_recall(eval_data["codes"], eval_data["targets"])
                 metrics = {"precision": precision, "recall": recall}
                 rich.print(f"[yellow]{metrics}[/yellow]")
-                save_folder = DUMP_FOLDER / str(args.experiment_folder) / dataset / f"{prompt_name}_seed{str(seed)}"
+                save_folder = DUMP_FOLDER / str(args.experiment_folder) / dataset / f"{model_source}_seed{str(seed)}"
 
                 logger.info(f"Dumping results to {save_folder}")
                 save_folder.mkdir(parents=True, exist_ok=True)
