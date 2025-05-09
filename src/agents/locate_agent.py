@@ -40,6 +40,14 @@ class OutputModel(pydantic.BaseModel):
 
 class PLMICDLocateAgent(HfOperation):
 
+    def init_model(self) -> PLMICDModel:
+        self.tokenizer = AutoTokenizer.from_pretrained(self.pretrained_model_path + "/tokenizer")
+        self.model = PLMICDModel.from_pretrained(self.pretrained_model_path + "/model")
+        self.model.eval()
+        self.model.to(self.device)
+        self.id2label = self.model.config.id2label
+
+
     def __init__(
         self,
         pretrained_model_path: str,
@@ -49,17 +57,15 @@ class PLMICDLocateAgent(HfOperation):
         *args,
         **kwargs,
     ):
-        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_path + "/tokenizer")
-        self.model = PLMICDModel.from_pretrained(pretrained_model_path + "/model")
-        self.model.eval()
+        self.pretrained_model_path = pretrained_model_path
         self.device = device
-        self.model.to(device)
-        self.id2label = self.model.config.id2label
         self.top_k = top_k
         self.note_max_length = note_max_length
-        super().__init__(init_client_fn=lambda _: None, *args, **kwargs)
+        super().__init__(init_client_fn=self.init_model, *args, **kwargs)
 
     def __call__(self, batch: dict[str, list[typ.Any]], *args, **kwargs) -> dict[str, list[typ.Any]]:
+        # Force client
+        self.client
         batch_size = len(batch[list(batch.keys())[0]])
         batch_rows = [{key: value[i] for key, value in batch.items()} for i in range(batch_size)]
         batch_rows = [InputModel(
