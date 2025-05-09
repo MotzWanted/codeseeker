@@ -57,12 +57,15 @@ class PLMICDLocateAgent(HfOperation):
         self.id2label = self.model.config.id2label
         self.top_k = top_k
         self.note_max_length = note_max_length
-        super().__init__(*args, **kwargs)
+        super().__init__(init_client_fn=lambda _: None, *args, **kwargs)
 
     def __call__(self, batch: dict[str, list[typ.Any]], *args, **kwargs) -> dict[str, list[typ.Any]]:
         batch_size = len(batch[list(batch.keys())[0]])
         batch_rows = [{key: value[i] for key, value in batch.items()} for i in range(batch_size)]
-        batch_rows = [InputModel({**row}) for row in batch_rows]
+        batch_rows = [InputModel(
+            terms=[],
+            note=row["note"],
+        ) for row in batch_rows]
         batch_notes = [row.note for row in batch_rows]
 
         # Tokenize the data
@@ -77,18 +80,18 @@ class PLMICDLocateAgent(HfOperation):
             outputs = self.model(**tokenized_inputs)
 
         # Sort the output logits for each entry in the batch and get the top k labels
-        logits = outputs.logits.sigmoid()
+        logits = outputs["logits"].sigmoid()
         top_k_logits, top_k_indices = torch.topk(logits, self.top_k, dim=-1)
         # Convert the top_k indices to labels
         # for item in batch... for index in item
-        top_k_codes = [[self.id2label[idx.item()] for idx in indices] for indices in top_k_indices]
+        top_k_codes = [[self.id2label[str(idx.item())] for idx in indices] for indices in top_k_indices]
 
         return {
             **batch,
-            "terms": [],
+            "terms": [[] for _ in range(batch_size)],
             "codes": top_k_codes,
-            "evidence": None,
-            "response": None,
+            "evidence": [[] for _ in range(batch_size)],
+            "response": [[] for _ in range(batch_size)],
         }
 
 class HfLocateAgent(HfOperation):
@@ -191,9 +194,9 @@ class LLMLocateAgent(HfLocateAgent):
 
 def create_locate_agent(
     agent_type: str,
-    sampling_params: dict[str, typ.Any],
-    prompt_name: str | None,
-    pretrained_model_path: str | None,
+    sampling_params: dict[str, typ.Any] = {},
+    prompt_name: str | None = None,
+    pretrained_model_path: str | None = None,
     seed: int = 42,
 ) -> HfLocateAgent:
     """

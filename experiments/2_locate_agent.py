@@ -48,7 +48,7 @@ class Arguments(BaseArguments):
     seed: str = "1"  # e.g., "1:2:3:4:5"
 
     num_workers: int = 1
-    batch_size: int = 1
+    batch_size: int = 16
 
 
 def run(args: Arguments):
