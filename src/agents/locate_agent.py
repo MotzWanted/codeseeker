@@ -5,6 +5,8 @@ from functools import partial
 import re
 import typing as typ
 from loguru import logger
+import torch
+from transformers import AutoTokenizer
 
 from prompt_poet import Prompt
 from jinja2 import Environment, FileSystemLoader
@@ -16,6 +18,8 @@ from throughster.hf_datasets import HfOperation
 from agents.base import PATH_TO_TEMPLATES, custom_tojson
 from trie.base import Trie
 from trie import models
+from models.plmicd import PLMICDModel
+
 
 
 class InputModel(pydantic.BaseModel):
@@ -33,6 +37,68 @@ class OutputModel(pydantic.BaseModel):
     evidence: list[tuple[str, str]] | None = None
     response: str | None = None
 
+
+class PLMICDLocateAgent(HfOperation):
+
+    def init_model(self) -> PLMICDModel:
+        self.tokenizer = AutoTokenizer.from_pretrained(self.pretrained_model_path + "/tokenizer")
+        self.model = PLMICDModel.from_pretrained(self.pretrained_model_path + "/model")
+        self.model.eval()
+        self.model.to(self.device)
+        self.id2label = self.model.config.id2label
+
+
+    def __init__(
+        self,
+        pretrained_model_path: str,
+        device: str = "cpu",
+        top_k: int = 1000,
+        note_max_length: int = 4000,
+        *args,
+        **kwargs,
+    ):
+        self.pretrained_model_path = pretrained_model_path
+        self.device = device
+        self.top_k = top_k
+        self.note_max_length = note_max_length
+        super().__init__(init_client_fn=self.init_model, *args, **kwargs)
+
+    def __call__(self, batch: dict[str, list[typ.Any]], *args, **kwargs) -> dict[str, list[typ.Any]]:
+        # Force client
+        self.client
+        batch_size = len(batch[list(batch.keys())[0]])
+        batch_rows = [{key: value[i] for key, value in batch.items()} for i in range(batch_size)]
+        batch_rows = [InputModel(
+            terms=[],
+            note=row["note"],
+        ) for row in batch_rows]
+        batch_notes = [row.note for row in batch_rows]
+
+        # Tokenize the data
+        tokenized_inputs = self.tokenizer(
+            batch_notes,
+            padding="longest",
+            truncation=True,
+            return_tensors="pt",
+            max_length=self.note_max_length,
+        ).to(self.device)
+        with torch.no_grad():
+            outputs = self.model(**tokenized_inputs)
+
+        # Sort the output logits for each entry in the batch and get the top k labels
+        logits = outputs["logits"].sigmoid()
+        top_k_logits, top_k_indices = torch.topk(logits, self.top_k, dim=-1)
+        # Convert the top_k indices to labels
+        # for item in batch... for index in item
+        top_k_codes = [[self.id2label[str(idx.item())] for idx in indices] for indices in top_k_indices]
+
+        return {
+            **batch,
+            "terms": [[] for _ in range(batch_size)],
+            "codes": top_k_codes,
+            "evidence": [[] for _ in range(batch_size)],
+            "response": [[] for _ in range(batch_size)],
+        }
 
 class HfLocateAgent(HfOperation):
     def __init__(self, trie: Trie, init_client_fn: typ.Callable[..., ModelInterface]):
@@ -71,7 +137,7 @@ class HfLocateAgent(HfOperation):
     async def predict(self, inputs: list[InputModel]) -> list[OutputModel]:
         """Handle a batch of alignment tasks."""
         NotImplementedError
-
+        
 
 class LLMLocateAgent(HfLocateAgent):
     def __init__(self, prompt_name: str, seed: int, sampling_params: dict[str, typ.Any], *args, **kwargs):
@@ -134,8 +200,9 @@ class LLMLocateAgent(HfLocateAgent):
 
 def create_locate_agent(
     agent_type: str,
-    prompt_name: str,
-    sampling_params: dict[str, typ.Any],
+    sampling_params: dict[str, typ.Any] = {},
+    prompt_name: str | None = None,
+    pretrained_model_path: str | None = None,
     seed: int = 42,
 ) -> HfLocateAgent:
     """
@@ -152,12 +219,22 @@ def create_locate_agent(
     Returns:
         LLMAligner: An instance of either BinaryLLMAligner or LongContextLLMAligner.
     """
+    if not prompt_name and not pretrained_model_path:
+        raise ValueError("Either prompt_name or pretrained_model_path must be provided.")
     if agent_type == "long-context":
         return partial(
             LLMLocateAgent,
             prompt_name=prompt_name,
             seed=seed,
             sampling_params=sampling_params,
+        )
+    elif agent_type == "plmicd":
+        return partial(
+            PLMICDLocateAgent,
+            pretrained_model_path=pretrained_model_path,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            top_k=sampling_params.get("top_k", 1000),
+            note_max_length=sampling_params.get("note_max_length", 4000),
         )
     else:
         raise ValueError(f"Unsupported agent type: {agent_type}")
