@@ -40,7 +40,7 @@ class BaseArguments(BaseSettings):
     @pydantic.computed_field
     def _deployment_name(self) -> str:
         """Get the model name."""
-        return self.deployment.split("/")[-1] if self.deployment else self.pretrained_model_path.replace("/", "-")
+        return self.deployment.split("/")[-1] if self.deployment else f"{self.pretrained_model_path[1:-1].replace("/", "-")}/"
 
     @pydantic.computed_field
     def _hash(self) -> str:
