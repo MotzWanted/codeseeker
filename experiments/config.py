@@ -1,12 +1,9 @@
 from collections import OrderedDict
-from functools import partial
 import hashlib
 import pathlib
 import typing as typ
-import datasets
 import pydantic
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from throughster.factory import create_interface
 import torch
 
 from finetune.monitor import ClassAggregator, MeanAggregator, Monitor
@@ -22,7 +19,7 @@ class BaseArguments(BaseSettings):
 
     provider: str = "vllm"  # "azure" | "vllm" | "mistral"
     api_base: str
-    deployment: str | None = None
+    deployment: str
     pretrained_model_path: str | None = None
     endpoint: typ.Literal["chat/completions", "completions"] = "completions"
     use_cache: bool = True  # whether to cache on request level
@@ -40,7 +37,7 @@ class BaseArguments(BaseSettings):
     @pydantic.computed_field
     def _deployment_name(self) -> str:
         """Get the model name."""
-        return self.deployment.split("/")[-1] if self.deployment else f"{self.pretrained_model_path[1:-1].replace("/", "-")}/"
+        return self.deployment.split("/")[-1]
 
     @pydantic.computed_field
     def _hash(self) -> str:
@@ -87,32 +84,6 @@ class BaseArguments(BaseSettings):
             if ":" in self.prompt_name
             else [self.prompt_name]
         )
-
-
-def _get_dataset(dset: datasets.Dataset | datasets.DatasetDict) -> datasets.Dataset:
-    """Get a `datasets.Dataset`."""
-    if isinstance(dset, datasets.Dataset):
-        return dset
-    return next(iter(dset.values()))
-
-
-def _init_client_fn(
-    provider: str,
-    api_base: str,
-    endpoint: str,
-    deployment: str,
-    use_cache: bool,
-    **kwargs,
-) -> typ.Callable:
-    return partial(
-        create_interface,
-        provider=provider,
-        api_base=api_base,
-        endpoint=endpoint,
-        model_name=deployment,
-        use_cache=use_cache,
-        cache_dir=str(pathlib.Path(f"~/.cache/throughster/{deployment}").expanduser()),
-    )
 
 
 def list2tensor_vectorized(
@@ -187,6 +158,7 @@ class TrieClassificationMonitor(Monitor):
         tp = self.aggregators["tp"].get()
         fp = self.aggregators["fp"].get()
         fn = self.aggregators["fn"].get()
+        tn = self.aggregators["tn"].get()
         # Micro F1
         micro_precision = tp.sum() / (tp.sum() + fp.sum() + 1e-10)
         micro_recall = tp.sum() / (tp.sum() + fn.sum() + 1e-10)
@@ -217,8 +189,9 @@ class TrieClassificationMonitor(Monitor):
         output["f1_macro"] = macro_f1
 
         # Classification Metrics
-        output["micro_recall"] = micro_recall
-        output["micro_precision"] = micro_precision
+        output["recall"] = micro_recall
+        output["precision"] = micro_precision
+        output["specificity"] = tn.sum() / (tn.sum() + fp.sum() + 1e-10)
         output["accuracy"] = self.aggregators["_hit"].get()
         output["prediction-bias-ratio"] = self.aggregators["pos_ratio"].get()
         # output["table"] = self._make_table_date(f1_per_class, tp, fp, fn, self.aggregators["tn"].get())

@@ -14,7 +14,7 @@ from grpc._channel import _InactiveRpcError
 from qdrant_client import models as qdrm
 from qdrant_client.http import exceptions as qdrexc
 
-from search.qdrant_search.models import CollectionBody
+from retrieval.qdrant_search.models import CollectionBody
 
 
 def _init_client(

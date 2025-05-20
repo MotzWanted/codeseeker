@@ -3,7 +3,7 @@
   content: |
     You are a highly skilled medical coding assistant specializing in structured code extraction from clinical notes.
     Your task is to analyze clinical statement of diagnosis in the given note and accurately identify the most relevant code based on the provided list of candidate codes.
-    Note that a clinical note may record many diagnoses (or procedures), but you are given a subset of candidate codes where only one of them is assignable.
+    Note that a clinical note may record many diagnoses, but you are given a subset of candidate codes where one or a few of them is assignable.
 
     The coding system you are given defines a range on instructional notes grouped in the following categories:
     # General notes:
@@ -14,11 +14,6 @@
     # Exclude notes:
     - "Excludes1": Indicates whether two chapters, categories, or codes are mutually exclusive. An "Excludes1" note is used when two conditions cannot occur together, such as a congenital form versus an acquired form of the same condition. Thus, leave out one of the codes when both conditions are present.
     - "Excludes2": Indicates that the condition excluded is not part of the condition represented by the code, but a patient may have both conditions at the same time. When an "Excludes2" note appears, it is acceptable to use both the code and the excluded code together, when appropriate.
-
-    # Etiology/manifestation convention ("Code first", "Use additional code" and "in diseases classified elsewhere" notes):
-    - Certain conditions have both an underlying etiology and multiple body system manifestations due to the underlying etiology. For such conditions, the coding convention requires the underlying condition be sequenced first, if applicable, followed by the manifestation. Wherever such a combination exists, there is a “use additional code” note at the etiology code, and a “code first” note at the manifestation code. These instructional notes indicate the proper sequencing order of the codes, etiology followed by manifestation.
-    - In most cases the manifestation codes will have in the code description, "in diseases classified elsewhere."
-    - "Code first" and “Use additional code” notes are also used as sequencing rules in the classification for certain codes that are not part of an etiology/manifestation combination.
     \n
 
 - name: new input
@@ -26,6 +21,9 @@
   content: |
     ====== Now let's start! ======
     Clinical Note: {{ custom_tojson(note | escape) }}
+
+    ====== Guidelines ======{% for g in guidelines %}
+      {{ custom_tojson(g.content) }}{% endfor %}
 
     ====== Instructional Notes ======{% for g in instructional_notes if g.assignable %}
     {% set name = g.pop("name") %}
@@ -35,7 +33,8 @@
 
     ====== Candidate Codes ======
     {% for c in codes %}
-    ID: {{ loop.index }} |  Code: {{ custom_tojson(c.name) }} | Description: {{ custom_tojson(c.description) }} | Etiology: {{ c.etiology }} | Manifestation: {{ c.manifestation }} | ID END: {{ loop.index }}
+    ID: {{ loop.index }} |  Code: {{ custom_tojson(c.name) }} | Description: {{ custom_tojson(c.description) }} | ID END: {{ loop.index }}
     {% endfor %}
 
-    Analyze the clinical note against the provided list of candidate codes and select the ID of the most relevant code. Please reason step by step, and output your final answer as the ID of the selected code within <answer>...</answer>.
+    Analyze the clinical note against the guidelines and instructional notes to select the IDs of the assignable codes. If no codes are relevant output ID 0. Please reason step by step, and output your final answer as the ID of the selected codes within <answer>...</answer>.
+    <think>

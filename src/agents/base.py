@@ -64,7 +64,7 @@ class HfBaseAgent(HfOperation):
         prompt_name: str,
         seed: int,
         sampling_params: dict[str, typ.Any],
-        max_retries: int = 5,
+        max_retries: int = 10,
     ):
         self.init_client_fn = init_client_fn
         env = Environment(loader=FileSystemLoader(PATH_TO_TEMPLATES), autoescape=False)
@@ -113,9 +113,7 @@ class HfBaseAgent(HfOperation):
         batch_size = len(batch[list(batch.keys())[0]])
 
         batch_rows: list[dict[str, typ.Any]] = [
-            self.format_request(
-                **self._validate_input({key: value[i] for key, value in batch.items()})
-            )
+            self.format_request(**{key: value[i] for key, value in batch.items()})
             for i in range(batch_size)
         ]
 
@@ -144,11 +142,6 @@ class HfBaseAgent(HfOperation):
         return self.client.sync_structured_batch_call(
             requests, self.parser, self.max_retries
         )
-
-    @abstractmethod
-    def _validate_input(self, row: dict[str, typ.Any]) -> dict[str, typ.Any]:
-        """Format the input."""
-        ...
 
     @abstractmethod
     def parser(self, str) -> dict[str, typ.Any]:

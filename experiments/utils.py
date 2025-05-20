@@ -1,4 +1,6 @@
 from collections import defaultdict
+from functools import partial
+import pathlib
 import typing
 
 import datasets
@@ -11,6 +13,7 @@ from intervaltree import IntervalTree
 from rouge_score import rouge_scorer
 
 from trie.icd import ICD10Trie
+from throughster.factory import create_interface
 
 
 def _build_ground_truth(evidence_spans: list[dict], note: str) -> IntervalTree:
@@ -92,29 +95,32 @@ def format_dataset(
     debug: bool = False,
 ) -> datasets.Dataset:
     """Format the dataset."""
+
     if isinstance(dataset, datasets.DatasetDict):
         dataset = datasets.concatenate_datasets(list(dataset.values()))
 
-    unique_codes: set[str] = set()
-    for codes in dataset["targets"]:
-        unique_codes.update(codes)
-    dataset = dataset.map(
-        lambda row: {
-            **row,
-            "targets": [code for code in row["targets"] if code in trie.lookup],
-        }
-    )
+    trie_lookup_set = set(trie.lookup.keys())  # Ensure fast lookup
 
-    filtered_codes: set[str] = set()
-    for codes in dataset["targets"]:
-        filtered_codes.update(codes)
+    all_codes = set()
+    filtered_out = set()
 
-    # print difference between unique_codes and filtered_codes
-    filtered_codes = unique_codes - filtered_codes
-    if filtered_codes:
+    def filter_targets(batch):
+        nonlocal all_codes, filtered_out
+        filtered_batch = []
+        for codes in batch["targets"]:
+            all_codes.update(codes)
+            filtered = [code for code in codes if code in trie_lookup_set]
+            filtered_batch.append(filtered)
+            filtered_out.update(set(codes) - set(filtered))
+        return {"targets": filtered_batch}
+
+    dataset = dataset.map(filter_targets, batched=True)
+
+    if filtered_out:
         logger.warning(
-            f"Number of filtered codes ({len(filtered_codes)}): `{filtered_codes}`"
+            f"Number of filtered codes ({len(filtered_out)}): `{filtered_out}`"
         )
+
     if debug:
         return dataset.select(range(10))
     return dataset
@@ -126,71 +132,87 @@ def build_icd_trie(year: int = 2022) -> ICD10Trie:
     return trie
 
 
+def _get_dataset(dset: datasets.Dataset | datasets.DatasetDict) -> datasets.Dataset:
+    """Get a `datasets.Dataset`."""
+    if isinstance(dset, datasets.Dataset):
+        return dset
+    return next(iter(dset.values()))
+
+
 def analyse_agent_metrics(
     eval_data: list[dict[str, typing.Any]],
-    xml_trie: Trie,
+    xml_trie,
     ranks: list[int],
     strict: bool = False,
 ) -> dict[str, float]:
-    """Evaluate retrieval metrics (recall and precision) at different rank cutoffs."""
-    sum_recall = defaultdict(float)
-    sum_precision = defaultdict(float)
-    n_examples = len(eval_data)
+    """Evaluate retrieval metrics (micro recall and precision) at different rank cutoffs."""
+    total_tp = defaultdict(int)
+    total_fp = defaultdict(int)
+    total_seen = defaultdict(int)
 
     for row in track(eval_data, total=len(eval_data), description="Evaluating metrics"):
         row_dict = dict(row)
-        term_ids = [t["id"] for t in row_dict["retrieved_terms"]]
         target_codes = set(row_dict["targets"])
 
         accumulated_codes = set()
-        accumulated_lead_terms = set()
         tp_at_k = {}
         seen_at_k = {}
-        terms_per_lead_at_k = {}
 
-        # iterate over retrieved term IDs and update the true‑positive tally
-        for i, term_id in enumerate(term_ids, start=1):
-            accumulated_lead_terms.add(term_id.split(".")[0])
+        for i, term_id in enumerate(row_dict["terms"], start=1):
             if strict:
-                term = xml_trie.index[term_id]
-                if term.code:
-                    accumulated_codes.add(term.code)
-                if term.manifestation_code:
-                    accumulated_codes.add(term.manifestation_code)
+                accumulated_codes.update(
+                    xml_trie.get_term_codes(term_id, subterms=False)
+                )
             else:
-                accumulated_codes.update(xml_trie.get_all_term_codes(term_id))
+                accumulated_codes.update(
+                    xml_trie.get_term_codes(term_id, subterms=True)
+                )
 
             if i in ranks:
                 tp_at_k[i] = len(accumulated_codes & target_codes)
                 seen_at_k[i] = len(accumulated_codes)
-                terms_per_lead_at_k[i] = i / len(accumulated_lead_terms)
 
-        # fill missing ranks with the last computed value
-        last_tp, last_seen = 0, 1
         for k in sorted(ranks):
-            tp_here = tp_at_k.get(k, last_tp)
-            seen_here = seen_at_k.get(k, last_seen)
-            negatives_per_positives = seen_here - tp_here
-            sum_recall[f"recall@{k}"] += tp_here / len(target_codes)
-            sum_precision[f"precision@{k}"] += tp_here / seen_here
-            sum_precision[f"neg_per_pos@{k}"] += negatives_per_positives
-            sum_precision[f"terms_per_lead@{k}"] += terms_per_lead_at_k.get(k, 0.0)
-            last_tp, last_seen = tp_here, seen_here
+            tp = tp_at_k.get(k, 0)
+            seen = seen_at_k.get(k, 0)
+            fn = len(target_codes) - tp
 
-    # convert sums → means
-    metrics_results = {
-        **{k: v / n_examples for k, v in sum_recall.items()},
-        **{k: v / n_examples for k, v in sum_precision.items()},
-    }
+            total_tp[k] += tp
+            total_fp[k] += fn
+            total_seen[k] += seen
 
-    # print metrics
+    metrics_results = {}
     for k in sorted(ranks):
-        rich.print(f"\nRetrieval metrics at rank {k}:")
-        rich.print(f"  Recall: {metrics_results[f'recall@{k}']:.4f}")
-        rich.print(f"  Precision: {metrics_results[f'precision@{k}']:.4f}")
-        rich.print(
-            f"  Negatives per positives: {metrics_results[f'neg_per_pos@{k}']:.4f}"
+        recall = (
+            total_tp[k] / (total_tp[k] + total_fp[k])
+            if (total_tp[k] + total_fp[k]) > 0
+            else 0.0
         )
-        rich.print(f"  Terms per lead: {metrics_results[f'terms_per_lead@{k}']:.4f}")
+        precision = total_tp[k] / total_seen[k] if total_seen[k] > 0 else 0.0
+        metrics_results[f"recall@{k}"] = recall
+        metrics_results[f"precision@{k}"] = precision
+
+        rich.print(f"\nRetrieval metrics at rank {k}:")
+        rich.print(f"  Micro Recall: {recall:.4f}")
+        rich.print(f"  Micro Precision: {precision:.4f}")
 
     return metrics_results
+
+
+def _init_client_fn(
+    provider: str,
+    api_base: str,
+    endpoint: str,
+    deployment: str,
+    use_cache: bool,
+    **kwargs,
+) -> typing.Callable:
+    return partial(
+        create_interface,
+        provider=provider,
+        api_base=api_base,
+        endpoint=endpoint,
+        model_name=deployment,
+        use_cache=use_cache,
+        cache_dir=str(pathlib.Path(f"~/.cache/throughster/{deployment}").expanduser()),
+    )

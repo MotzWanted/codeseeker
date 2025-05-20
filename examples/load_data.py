@@ -46,14 +46,13 @@ DATASET_CONFIGS = {
         "name_or_path": mdace_inpatient,
         "subsets": ["icd10cm"],
         "split": "test",
-        "options": {"adapter": "MdaceAdapter", "negatives": 50},
+        "options": {"adapter": "MdaceAdapter"},
     },
     "mimic-iv": {
         "identifier": "mimic-iv",
         "name_or_path": mimiciv,
         "split": "test",
         "subsets": ["icd10-3.4"],
-        "options": {"negatives": 100, "hard_negatives": 1.0},
     },
     "my_data": {
         "identifier": "my_data",

@@ -73,6 +73,15 @@ class InstructionalNote(pydantic.BaseModel):
         )
 
 
+class Guideline(pydantic.BaseModel):
+    """Represents the guidelines for ICD-10-CM/PCS."""
+
+    id: str
+    number: str
+    title: str
+    content: str
+
+
 class Term(pydantic.BaseModel):
     """Represents a term in an alphabetic index."""
 

@@ -1,0 +1,19 @@
+- name: system instructions
+  role: system
+  content: |
+    You are a highly skilled medical coding assistant specializing in structured code extraction from clinical notes.
+    Your task is to analyze text for medical terminology to determine the most relevant term from the alphabetical index.
+    \n
+
+- name: new input
+  role: user
+  content: |
+    ====== Now let's start! ======
+    Clinical Note: {{ custom_tojson(note | escape) }}
+
+    ====== Alphabetical Index ======
+    {% for t in terms %}
+    ID: {{ loop.index }} | Term: "{{ t.path }}" | ID END: {{ loop.index }}
+    {% endfor %}
+
+    Analyze the clinical note against the alphabetic index and select the ID of the most relevant term. If no terms are relevant output ID 0. Please output the ID of the selected term.
