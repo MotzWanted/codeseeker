@@ -1,4 +1,4 @@
-# CodeSeeker: Medical Code Assignment Experiments
+# Code Like Humans (CLH): A Multi-Agent Solution for Medical Coding
 
 This repository contains experiments for LLM-based medical code assignment using a multi-agent approach.
 
@@ -126,3 +126,26 @@ Each script can be configured through command-line arguments. Use the `--help` f
 ```bash
 uv run python experiments/benchmark.py --help
 ```
+
+## Ethical Considerations and Limitations
+
+CLH is an open-source research project designed to explore the potential of large language models in medical coding automation. While we strive for transparency and accessibility by releasing our code under the MIT license, there are important ethical considerations and limitations to be aware of:
+
+### Research Use Only
+This codebase is intended **strictly for research purposes**. It should not be used in clinical practice or for making medical coding decisions that affect patient care, billing, or healthcare operations. The models and approaches demonstrated here have not undergone the rigorous validation required for clinical deployment.
+
+### Limitations
+- The system's outputs cannot be guaranteed to be accurate or complete
+- Models may exhibit biases present in the training data
+- Performance can vary significantly across different medical specialties and coding systems
+- The system has not been validated against current medical coding standards and guidelines
+- No warranty is provided for the accuracy or reliability of the code assignments
+
+### Responsible Development
+Before considering any adaptation of this work for production use:
+- Extensive validation must be performed
+- Clinical expertise must be incorporated
+- Compliance with relevant healthcare regulations must be ensured
+- Proper safety measures and human oversight must be implemented
+
+We encourage open collaboration and research in this area while emphasizing the critical importance of responsible development practices in healthcare applications. 
