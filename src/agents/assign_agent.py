@@ -12,14 +12,6 @@ ANSWER_PATTERN = r"<answer>.*?(\b[1-9]\d{0,3}(?:\s*,\s*[1-9]\d{0,3})*\b).*?<\/an
 class AssignAgent(HfBaseAgent):
     """A dummy assign agent that simulates the candidate space"""
 
-    def _validate_input(self, row: dict[str, typ.Any]) -> dict[str, typ.Any]:
-        """Format the input."""
-        if "note" not in row or "codes" not in row or "instructional_notes" not in row:
-            raise ValueError(
-                f"Missing `note`, `code` or `instruction_notes` in input data: {row}"
-            )
-        return row
-
     def parser(self, content: str) -> dict[str, typ.Any]:
         """Compress the choices."""
         content = content.replace("IDs:", "").replace("ID:", "")
@@ -44,14 +36,6 @@ class StructuredAssignAgent(AssignAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.sampling_params["guided_regex"] = self.CODE_LIST
-
-    def _validate_input(self, row: dict[str, typ.Any]) -> dict[str, typ.Any]:
-        """Format the input."""
-        if "note" not in row or "codes" not in row or "instructional_notes" not in row:
-            raise ValueError(
-                f"Missing `note`, `code` or `instruction_notes` in input data: {row}"
-            )
-        return row
 
     def parser(self, content: str) -> dict[str, typ.Any]:
         """Compress the choices into a single."""

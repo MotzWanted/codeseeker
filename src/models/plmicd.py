@@ -58,24 +58,17 @@ class PLMICDModel(PreTrainedModel):
         # Use pretrained encoder if provided, otherwise initialize a new encoder from config
         if encoder is None:
             encoder_model_type = config.encoder.pop("model_type")
-            encoder_config_dict = config.encoder.to_dict()
-            self.config.encoder = AutoConfig.for_model(
-                encoder_model_type, **encoder_config_dict
-            )
+            self.config.encoder = AutoConfig.for_model(encoder_model_type, **config.encoder)  # type: ignore
             encoder = AutoModel.from_config(
                 self.config.encoder, add_pooling_layer=False
             )
-            if encoder is None:
-                raise ValueError(
-                    f"Encoder model type {encoder_model_type} not found in AutoModel."
-                )
-            encoder.eval()
+            encoder.eval()  # type: ignore
 
         self.encoder = encoder
 
         # make sure that the individual model's config refers to the shared config
         # so that the updates to the config will be synced
-        self.encoder.config = self.config.encoder
+        self.encoder.config = self.config.encoder  # type: ignore
 
         self.label_wise_attention = LabelCrossAttention(
             input_size=config.encoder.hidden_size, num_classes=config.num_classes

@@ -1,8 +1,12 @@
 from functools import reduce
 import itertools
 from operator import mul
+import re
+import typing
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import fitz
 
 
 from trie import models, xml_utils
@@ -56,11 +60,139 @@ class ICD10Trie(Trie):
     def parse(self) -> None:
         """Parse the downloaded ICD files."""
         self.parse_tabular_files()
-
         self.parse_alphabetic_indexes()
+        self.parse_guidelines()
 
-        # TODO: parse pdf guidelines
-        # self.parse_guidelines(expected_files)
+    @staticmethod
+    def _page_text(page: "fitz.Page") -> str:  # noqa: D401
+        """Return text from *page* using whichever API is available.
+
+        Handles the *get_text* vs *getText* naming difference between PyMuPDF
+        1.23+ and older versions.  The `# type: ignore[attr-defined]` suppresses
+        Pylance complaints when it cannot see the attribute in the active stub.
+        """
+        if hasattr(page, "get_text"):
+            return page.get_text()  # type: ignore[attr-defined]
+        return page.getText()  # type: ignore[attr-defined]
+
+    @staticmethod
+    def flex_title_pat(title: str) -> str:
+        """Build a whitespace-flexible regex for a heading."""
+        parts = [re.escape(part) for part in re.split(r"\s+", title.strip()) if part]
+        return r"\s+".join(parts)
+
+    def parse_guidelines(self) -> None:
+        doc = fitz.open(self.files_map.cm_guidelines)
+
+        # 1) Fast path: many PDFs ship their own outline
+        if hasattr(doc, "get_toc"):
+            toc = doc.get_toc(simple=True)  # type: ignore[attr-defined]
+        elif hasattr(doc, "getToC"):
+            toc = doc.getToC(simple=True)  # type: ignore[attr-defined]
+        else:
+            toc = []
+        chapters: list[dict[str, typing.Any]] = []
+        sect_rx = re.compile(r"Section\s+([I]+)\b", re.I)  # NEW – Roman‑numeral capture
+        chap_rx = re.compile(r"Chapter\s+(\d+)", re.I)
+        for level, title, page in track(
+            toc, total=doc.page_count, description="Parsing Guidelines"
+        ):
+            if chap_rx.search(title):
+                num = chap_rx.search(title).group(1)  # type: ignore
+                key = f"chapter_{num}"
+            elif sect_rx.search(title):
+                num = sect_rx.search(title).group(1)  # type: ignore
+                key = f"section_{num}"
+            else:
+                continue  # skip non-chapter/section entries
+            clean_title = (
+                title.split(":", 1)[1].strip() if ":" in title else title.strip()
+            )
+            chapters.append(
+                {"key": key, "num": num, "title": clean_title, "start_page": int(page)}
+            )
+
+        if not chapters:
+            Console().print(
+                "[yellow]No chapter entries found in outline – skipping.[/yellow]"
+            )
+            return
+
+        chapters.sort(key=lambda c: c["start_page"])
+        for idx, chap in enumerate(chapters):
+            start_pg = chap["start_page"]
+            end_pg = (
+                chapters[idx + 1]["start_page"]
+                if idx < len(chapters) - 1
+                else doc.page_count
+            )
+
+            # gather the raw pages once
+            pages_text = "\n".join(
+                self._page_text(doc[p]) for p in range(start_pg - 1, end_pg)
+            )
+
+            # 1) find where the current chapter title begins
+            if chap["key"].startswith("chapter_"):
+                hdr_rx = rf"^.*?Chapter\s+{chap['num']}\b.*$"
+            else:  # section_I, section_II, …
+                hdr_rx = self.flex_title_pat(chap["title"])
+            start_match = re.search(hdr_rx, pages_text, re.M | re.I)
+            if not start_match:
+                raise ValueError(
+                    f"Could not find chapter title {chap['title']} in pages {start_pg}–{end_pg}."
+                )
+            char_start = start_match.start()
+
+            # 2) find where the NEXT chapter title begins (if any)
+            next_ch = chapters[idx + 1] if idx < len(chapters) - 1 else None
+            if next_ch:
+                if chap["key"].startswith("chapter_"):
+                    hdr_rx = rf"^.*?Chapter\s+{next_ch['num']}\b.*$"
+                else:  # section_I, section_II, …
+                    hdr_rx = self.flex_title_pat(next_ch["title"])
+                match = re.search(hdr_rx, pages_text, re.M | re.I)
+                char_end = match.start() if match else len(pages_text)
+            else:
+                char_end = len(pages_text)
+
+            content = pages_text[char_start:char_end].strip()
+
+            if chap["key"] == "section_I":
+                section_re = re.compile(r"^\s*[ABC]\.\s", re.M)
+                section_matches = section_re.findall(content)
+                if len(section_matches) == 3:
+                    part_a = content[
+                        content.find(section_matches[0]) : content.find(
+                            section_matches[1]
+                        )
+                    ].strip()
+                    part_b = content[
+                        content.find(section_matches[1]) : content.find(
+                            section_matches[2]
+                        )
+                    ].strip()
+
+                    self.guidelines["IA"] = models.Guideline(
+                        id="section_I_A",
+                        number="IA",
+                        title="A. Conventions for the ICD‑10‑CM",
+                        content=part_a,
+                    )
+                    self.guidelines["IB"] = models.Guideline(
+                        id="section_I_B",
+                        number="IB",
+                        title="B. General Coding Guidelines",
+                        content=part_b,
+                    )
+                    continue
+
+            self.guidelines[chap["num"]] = models.Guideline(
+                id=chap["key"],
+                number=chap["num"],
+                title=chap["title"],
+                content=content,
+            )
 
     def parse_tabular_files(self) -> None:
         """Parse the tabular files."""
@@ -367,6 +499,8 @@ if __name__ == "__main__":
     test_code = "Z66"
     text_for_code = xml_trie[test_code].description
     print(f"Code {test_code} corresponds to: {text_for_code}")
+
+    xml_trie.group_by_category(["A00.1", "A01.00", "A17.82", "T63.123", "T63.42"])
 
     test_code = "0016070"
     text_for_code = xml_trie[test_code].description

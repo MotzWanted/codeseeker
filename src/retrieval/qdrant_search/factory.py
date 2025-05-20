@@ -370,29 +370,6 @@ def format_qdrant_point(
     return points
 
 
-def prefetch_iterator(
-    dataset: typing.Iterable[dict],
-    model_collection: list[ModelType],
-    query_config: list[dict[str, str]],
-    limit: int,
-):
-    for sample in dataset:
-        query_vectors = defaultdict(list)
-        for c in query_config:
-            query_vectors.update(
-                format_query_vectors(
-                    sample,
-                    c["query_key"],
-                    [m for m in model_collection if m.model_name == c["model_name"]],
-                )
-            )
-        yield [
-            qdrm.Prefetch(query=v, using=model_key, limit=limit)
-            for model_key, vecs in query_vectors.items()
-            for v in vecs
-        ]
-
-
 def instantiate_models(model_config: list[dict[str, str]]) -> list[ModelType]:
     """Instantiate the models described in the config."""
     models = []
@@ -459,6 +436,40 @@ def ensure_qdrant_index(
     return fingerprint
 
 
+def prefetch_iterator(
+    dataset: typing.Iterable[dict],
+    model_collection: list[ModelType],
+    query_config: list[dict[str, str]],
+    limit: int,
+    merge_search: bool = False,
+) -> typing.Generator[list[qdrm.Prefetch] | list[list[qdrm.Prefetch]], None, None]:
+    for sample in dataset:
+        query_vectors = defaultdict(list)
+        for c in query_config:
+            query_vectors.update(
+                format_query_vectors(
+                    sample,
+                    c["query_key"],
+                    [m for m in model_collection if m.model_name == c["model_name"]],
+                )
+            )
+        if merge_search:
+            yield [
+                qdrm.Prefetch(query=v, using=model_key, limit=limit)
+                for model_key, vecs in query_vectors.items()
+                for v in vecs
+            ]
+        zipped = zip(*query_vectors.values())
+
+        yield [
+            [
+                qdrm.Prefetch(query=v, using=k, limit=limit)
+                for k, v in zip(query_vectors.keys(), group)
+            ]
+            for group in zipped
+        ]
+
+
 def search(
     *,
     data: list[dict],
@@ -467,10 +478,23 @@ def search(
     index_name: str,
     limit: int,
     fusion: qdrm.Fusion = qdrm.Fusion.RRF,
+    merge_search: bool = False,
     timeout: int = 300,
 ) -> list[QueryResponse]:
-    """Execute one query per element produced by `prefetch_iterator`.
-    Returns the raw Qdrant responses so the caller can slice or post-process.
+    """Execute queries for each element produced by `prefetch_iterator`.
+
+    Args:
+        data: List of samples to search with
+        model_cfg: Model configuration list
+        service: QdrantSearchService instance
+        index_name: Name of the index to search
+        limit: Max number of results to return
+        fusion: If provided, fuse all queries using this strategy. If None, return separate results per query
+        timeout: Search timeout in seconds
+
+    Returns:
+        List of QueryResponse objects. If fusion is None, each response will contain results
+        for individual queries. If fusion is provided, responses will contain fused results.
     """
     model_collection = instantiate_models(model_cfg)
     prefetch_iter = prefetch_iterator(
@@ -480,18 +504,41 @@ def search(
         limit,
     )
     results: list[QueryResponse] = []
-    for query in track(
+    for prefetch_queries in track(
         prefetch_iter,
         total=len(data),
         description=f"Querying Qdrant index {index_name}",
     ):
-        res = service.client.query_points(
-            index_name,
-            prefetch=query,
-            query=qdrm.FusionQuery(fusion=fusion),
-            limit=limit,
-            with_payload=True,
-            timeout=timeout,
-        )
-        results.append(res)
+        if merge_search:
+            # Fuse all queries into a single search
+            res = service.client.query_points(
+                index_name,
+                prefetch=typing.cast(list[qdrm.Prefetch], prefetch_queries),
+                query=qdrm.FusionQuery(fusion=fusion),
+                limit=limit,
+                with_payload=True,
+                timeout=timeout,
+            )
+            results.append(res)
+        else:
+            # Execute each query separately
+            batch_results = service.client.query_batch_points(
+                index_name,
+                requests=[
+                    qdrm.QueryRequest(
+                        query=qdrm.FusionQuery(fusion=fusion),
+                        prefetch=q,
+                        limit=limit,
+                        with_payload=True,
+                    )
+                    for q in prefetch_queries
+                ],
+                timeout=timeout,
+            )
+            # Combine batch results into single response
+            combined = QueryResponse(points=[])
+            for res in batch_results:
+                combined.points.extend(res.points)
+            results.append(combined)
+
     return results

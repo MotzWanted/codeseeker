@@ -10,34 +10,38 @@ import torch
 from agents.assign_agent import create_assign_agent
 import dataloader
 from dataloader.base import DatasetConfig
+from retrieval.plm_icd import PLMICDRetriever
 import utils as exp_utils
 import config as exp_config
-from trie.icd import ICD10Trie
 
 
 class Arguments(exp_config.BaseArguments):
     """Args for the script."""
 
     experiment_id: str = "assign-agent"
-    experiment_name: str = "mock-negatives"
+    experiment_name: str = "plmicd-recall25"
 
-    api_base: str = "http://localhost:6535/v1"
+    api_base: str = "http://localhost:6538/v1"
     deployment: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
     endpoint: typ.Literal["chat/completions", "completions"] = "completions"
 
-    prompt_name: str = (
-        "assign_agent/structured_v1:assign_agent/structured_v2:assign_agent/structured_v3:assign_agent/structured_v4"
-    )
+    prompt_name: str = "assign_agent/reasoning_v2"
 
-    agent_type: str = "mock-structured"
+    pretrained_model_path: str = (
+        "/nfs/nas/mlrd/models/medical_coding/plmicd_mdace/100k_steps"
+    )
+    agent_type: str = "reasoning"
     temperature: float = 0.0
+    max_tokens: int = 10_000
 
     dataset: str = "mdace-icd10cm"  # "mimic-iii-50" | "mimic-iv" | "mdace-icd10cm"
-    negatives: str = (
-        "0:1:3:5:8:12:20"  # number of negative samples to include in the prompt
-    )
     seed: str = "1"  # e.g., "1:2:3:4:5"
     n_samples: int = 1
+
+    retriever: str = "plm_icd"
+    recall: str = (
+        "10:25:40:55:70"  # number of negative samples to include in the prompt
+    )
 
     num_workers: int = 4
     batch_size: int = 1
@@ -47,12 +51,12 @@ class Arguments(exp_config.BaseArguments):
     use_cache: bool = True  # whether to cache on request level
 
     @pydantic.computed_field
-    def _negatives(self) -> list[int]:
+    def _recall(self) -> list[int]:
         """Get the negatives."""
         return (
-            [int(x) for x in self.negatives.split(":")]
-            if ":" in self.negatives
-            else [int(self.negatives)]
+            [int(x) for x in self.recall.split(":")]
+            if ":" in self.recall
+            else [int(self.recall)]
         )
 
 
@@ -60,8 +64,15 @@ def run(args: Arguments):
     """Run the script."""
     # exp = mlflow.set_experiment(args.experiment_id)
     rich.print(args)
-    xml_trie = ICD10Trie.from_cms(year=2022)
-    xml_trie.parse()
+    xml_trie = exp_utils.build_icd_trie(year=2022)
+    icd10cm = [code.name for code in xml_trie.get_root_codes("cm")]
+    eval_trie: dict[str, int] = OrderedDict(
+        {code: idx for idx, code in enumerate(sorted(icd10cm), start=1)}
+    )
+    plm_icd = PLMICDRetriever(
+        pretrained_model_path=args.pretrained_model_path,
+        valid_labels=list(eval_trie.keys()),
+    )
     for dataset in args._datasets:  # type: ignore
         dset_config: DatasetConfig = DatasetConfig(
             **dataloader.DATASET_CONFIGS[dataset]
@@ -74,9 +85,47 @@ def run(args: Arguments):
         dset = exp_utils.format_dataset(dset, xml_trie, args.debug)
         logger.info(f"Running {dataset} with seeds `{args._seeds}`.")
         for prompt_name in args._prompts:  # type: ignore
-            for num_negs in args._negatives:  # type: ignore
+            for r in args._recall:  # type: ignore
+                plm_icd.top_k = r
                 for seed in args._seeds:  # type: ignore
-                    logger.info(f"Predicting with {num_negs} negatives...")
+                    dset = dset.map(
+                        plm_icd,
+                        batched=True,
+                        batch_size=16,
+                        desc=f"Retrieving codes for rank@{r}.",
+                    )
+                    retrieval_monitor = exp_config.TrieClassificationMonitor(
+                        trie=eval_trie
+                    )
+                    retrieval_monitor.update(
+                        target_inputs=dset["targets"],
+                        pred_inputs=dset["codes"],
+                    )
+                    retrieval_metrics = {
+                        k: v.item()
+                        for k, v in retrieval_monitor.get().items()
+                        if isinstance(v, torch.Tensor)
+                    }
+                    rich.print("[blue]Retrieval evaluation.[/blue]")
+                    rich.print(f"[blue]{retrieval_metrics}[/blue]")
+                    dset = dset.map(
+                        lambda x: {
+                            **x,
+                            "codes": sorted(
+                                [xml_trie[code].model_dump() for code in x["codes"]],
+                                key=lambda x: x["id"],
+                            ),
+                            "instructional_notes": xml_trie.get_instructional_notes(
+                                x["codes"]
+                            ),
+                            "subset_targets": [
+                                code for code in x["codes"] if code in x["targets"]
+                            ],
+                        },
+                        desc="Fetching ICD tabular data for codes.",
+                    )
+                    logger.info(f"Predicting with recall@{r} ...")
+
                     agent = create_assign_agent(
                         agent_type=args.agent_type,
                         prompt_name=prompt_name,
@@ -84,12 +133,11 @@ def run(args: Arguments):
                         sampling_params={
                             "temperature": args.temperature,
                             "seed": seed,
+                            "max_tokens": args.max_tokens,
                         },
                     )
                     task_maker = agent(
                         init_client_fn=exp_utils._init_client_fn(**args.model_dump()),
-                        trie=xml_trie,
-                        n_samples=num_negs,
                     )
                     eval_data = dset.map(
                         task_maker,
@@ -101,32 +149,52 @@ def run(args: Arguments):
                         load_from_cache_file=False,
                     )
 
-                    unique_codes: set[str] = set()
-                    for codes in eval_data["codes"]:
-                        unique_codes.update(codes)
-                    trie: dict[str, int] = OrderedDict(
-                        {
-                            code: idx
-                            for idx, code in enumerate(sorted(unique_codes), start=1)
-                        }
+                    eval_data = eval_data.map(
+                        lambda x: {
+                            **x,
+                            "output": [
+                                x["codes"][subset_idx - 1]["name"]
+                                for subset_idx in x["output"]
+                                if r >= subset_idx > 0
+                            ],
+                        },
+                        desc="Decoding output predictions",
+                        load_from_cache_file=False,
                     )
 
-                    monitor = exp_config.TrieClassificationMonitor(trie=trie)
-                    monitor.update(
-                        target_inputs=eval_data["targets"],
-                        pred_inputs=eval_data["predictions"],
+                    golden_monitor = exp_config.TrieClassificationMonitor(
+                        trie=eval_trie
                     )
-                    metrics = {
+                    ceiled_monitor = exp_config.TrieClassificationMonitor(
+                        trie=eval_trie
+                    )
+                    golden_monitor.update(
+                        target_inputs=eval_data["targets"],
+                        pred_inputs=eval_data["output"],
+                    )
+                    ceiled_monitor.update(
+                        target_inputs=eval_data["subset_targets"],
+                        pred_inputs=eval_data["output"],
+                    )
+                    golden_metrics = {
                         k: v.item()
-                        for k, v in monitor.get().items()
+                        for k, v in golden_monitor.get().items()
                         if isinstance(v, torch.Tensor)
                     }
-                    rich.print(f"[yellow]{metrics}[/yellow]")
+                    ceiled_metrics = {
+                        k: v.item()
+                        for k, v in ceiled_monitor.get().items()
+                        if isinstance(v, torch.Tensor)
+                    }
+                    rich.print("[yellow]Golden truth evaluation.[/yellow]")
+                    rich.print(f"[yellow]{golden_metrics}[/yellow]")
+                    rich.print("[blue]Evaluation conditioned on subset.[/blue]")
+                    rich.print(f"[blue]{ceiled_metrics}[/blue]")
                     save_folder = (
                         exp_config.DUMP_FOLDER
                         / str(args.experiment_folder)
                         / dataset
-                        / f"{prompt_name}_neg{str(num_negs)}_seed{str(seed)}"
+                        / f"{prompt_name}_neg{str(r)}_seed{str(seed)}"
                     )
 
                     logger.info(f"Dumping results to {save_folder}")
@@ -139,8 +207,12 @@ def run(args: Arguments):
                         )
                         dump_data = eval_data.remove_columns(list(cols_to_remove))
                         json.dump(dump_data.to_list(), f)
-                    with open(save_folder / "averages.json", "w") as f:
-                        json.dump(metrics, f)
+                    with open(save_folder / "golden_metrics.json", "w") as f:
+                        json.dump(golden_metrics, f)
+                    with open(save_folder / "ceiled_metrics.json", "w") as f:
+                        json.dump(ceiled_metrics, f)
+                    with open(save_folder / "retrieval_metrics.json", "w") as f:
+                        json.dump(retrieval_metrics, f)
                     with open(save_folder / "config.json", "w") as f:
                         json.dump(args.model_dump_json(), f)
 
