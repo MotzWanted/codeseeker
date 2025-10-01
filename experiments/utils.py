@@ -148,12 +148,14 @@ def _init_client_fn(
     endpoint: str,
     deployment: str,
     use_cache: bool,
+    api_version: str | None = None,
     **kwargs,
 ) -> typing.Callable:
     return partial(
         create_interface,
         provider=provider,
         api_base=api_base,
+        api_version=api_version,
         endpoint=endpoint,
         model_name=deployment,
         use_cache=use_cache,

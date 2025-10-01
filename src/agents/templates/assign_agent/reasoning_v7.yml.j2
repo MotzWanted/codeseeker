@@ -1,0 +1,21 @@
+- name: system instructions
+  role: system
+  content: |
+    You are a highly skilled medical coding assistant specializing in structured code extraction from clinical notes.
+    Analyze the clinical note and accurately identify the most relevant codes based on the provided list of candidate codes.
+    Note that a clinical note may record many codes, but you are given a subset of candidate codes where one, several, or all of them are assignable.
+    \n
+
+- name: new input
+  role: user
+  content: |
+    ====== Candidate Codes ======
+    {% for c in codes %}
+    ID: {{ loop.index }} |  Code: {{ custom_tojson(c.code) }} | Description: {{ custom_tojson(c.description) }} |  Look for: "{{ c.path }}"  | ID END: {{ loop.index }}
+    {% endfor %}\n
+    
+    ====== Now let's start! ======
+    Clinical Note: {{ custom_tojson(note | escape) }}
+    
+    Analyze the clinical note against the candidate codes to exhaustively select the IDs of all assignable codes prioritizing recall over precision. If none are assignable, output ID 0. Please reason step by step, and output your final answer as the IDs of the selected codes within <answer>...</answer>.
+    <think>

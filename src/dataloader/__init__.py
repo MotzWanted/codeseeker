@@ -4,11 +4,12 @@ from dataloader.meddec.constants import MEDDEC_PATH as meddec
 from dataloader.mimiciii.constants import MIMIC_III_50_PATH as mimiciii_50
 from dataloader.mimiciv.constants import MIMIC_IV_50_PATH as mimiciv_50
 from dataloader.mimiciv.constants import MIMIC_IV_PATH as mimiciv
-from dataloader.nbme.constants import NBME_PATH as nmbe  # noqa: F401
 from dataloader.snomed.constants import SNOMED_PATH as snomed
-from segmenters.base import factory
-
-SEGMENTER = factory("document", spacy_model="en_core_web_lg")
+from dataloader.tanner.constants import (
+    TANNER_ED_PATH,
+    TANNER_INPATIENT_PATH,
+    TANNER_SURGERY_PATH,
+)
 
 DATASET_CONFIGS: dict[str, dict] = {
     "debug": {
@@ -81,6 +82,42 @@ DATASET_CONFIGS: dict[str, dict] = {
         "subsets": ["icd10"],
         "options": {
             "order": "alphabetical",
+        },
+    },
+    "tanner-health-ed": {
+        "identifier": "tanner-health-ed",
+        "name_or_path": TANNER_ED_PATH,
+        "split": "test",
+        "options": {
+            "adapter": "TannerAdapter",
+            "subset_size": 1000,
+        },
+        "kwargs": {
+            "formatting": "newline",
+        },
+    },
+    "tanner-health-inpatient": {
+        "identifier": "tanner-health-inpatient",
+        "name_or_path": TANNER_INPATIENT_PATH,
+        "split": "test",
+        "options": {
+            "adapter": "TannerAdapter",
+            "subset_size": 1000,
+        },
+        "kwargs": {
+            "formatting": "newline",
+        },
+    },
+    "tanner-health-surgery": {
+        "identifier": "tanner-health-surgery",
+        "name_or_path": TANNER_SURGERY_PATH,
+        "split": "test",
+        "options": {
+            "adapter": "TannerAdapter",
+            "subset_size": 1000,
+        },
+        "kwargs": {
+            "formatting": "newline",
         },
     },
 }

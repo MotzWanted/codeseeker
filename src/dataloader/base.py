@@ -73,6 +73,10 @@ class DatasetConfig(pydantic.BaseModel):
         default_factory=DatasetOptions,  # type: ignore
         description="Loading/preprocessing options.",
     )
+    kwargs: dict[str, typ.Any] = pydantic.Field(
+        default_factory=dict,
+        description="Additional kwargs for the dataset loader.",
+    )
 
     model_config = SettingsConfigDict(
         frozen=True, arbitrary_types_allowed=True, extra="forbid", from_attributes=True

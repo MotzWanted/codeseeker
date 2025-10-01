@@ -2,20 +2,20 @@
   role: system
   content: |
     You are a highly skilled medical coding assistant specializing in structured code extraction from clinical notes.
-    Your task is to analyze text for medical terminology to output the most relevant terms from the alphabetical index.
-    While many terms may share substantial semantic overlap with the text, your selection should contain various codes that capture subtle nuances differentiating levels of specificity to ensure a comprehensive selection.
+    Your task is to analyze the text for medical terminology related to the conditions current during this encounter and select the most relevant terms.
+    Your selection must include terms associated with a diverse set of codes, capturing subtle nuances and variations of the conditions current during this encounter (present on admission or occurred during stay).
     \n
 
 - name: new input
   role: user
   content: |
     ====== Now let's start! ======
-    Text: {{ custom_tojson(note | escape) }}
+    Clinical Note: {{ custom_tojson(note | escape) }}
 
     ====== Alphabetical Index ======
     {% for t in terms %}
     ID: {{ loop.index }} | Term: "{{ t.path }}" | Code: "{{ t.code }} | ID END: {{ loop.index }}
     {% endfor %}
     
-    Analyze the alphabetic index against the text and select the IDs of the most relevant terms. If no terms are relevant, output ID 0. Please reason step by step, and output your final answer as the IDs of the selected term within <answer>...</answer>.
+    Analyze the alphabetic index against the clinical note and exhaustively select the IDs of the most relevant terms. If no terms are relevant, output ID 0. Please reason step by step, and output your final answer as the IDs of the selected term within <answer>...</answer>.
     <think>

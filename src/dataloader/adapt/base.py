@@ -1,5 +1,6 @@
 import abc
 import typing as typ
+import uuid
 
 import datasets
 import pydantic
@@ -60,13 +61,15 @@ class EvidenceSpan(pydantic.BaseModel):
 
 
 class BaseModel(pydantic.BaseModel):
-    """Fewshot model."""
+    """Base model for a note instance"""
 
-    aid: str
+    aid: str | uuid.UUID | None = pydantic.Field(default_factory=uuid.uuid4)
     note: str
     note_type: str | None = None
-    targets: list[str]
+    targets: list[str] | None = None
     evidence_spans: list[EvidenceSpan] | None = None
+
+    model_config = pydantic.ConfigDict(extra="allow")
 
 
 # class LegacyBaseModel(pydantic.BaseModel):

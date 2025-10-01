@@ -2,8 +2,7 @@ import typing as typ
 import pydantic
 
 
-from dataloader.adapt.adapters.mimic import MimicAdapter
-from dataloader.adapt.base import BaseModel
+from dataloader.adapt.base import BaseModel, Adapter
 from dataloader.base import DatasetOptions
 
 """
@@ -37,7 +36,7 @@ class MdaceDataModel(pydantic.BaseModel):
     annotations: MdaceAnnotationModel
 
 
-class MdaceAdapter(MimicAdapter):
+class MdaceAdapter(Adapter):
     """Adapter for the MedQA dataset."""
 
     input_model: typ.Type[MdaceDataModel] = MdaceDataModel

@@ -39,10 +39,10 @@ def decode_predictions(row: dict[str, typ.Any]) -> dict[str, typ.Any]:
                         "code": code,
                         "description": code_entry["description"],
                         "id": code_entry["id"],
-                        "paths": set(code_entry["path"].split(", ")),
+                        "paths": [code_entry["path"]],
                     }
                 else:
-                    merged_codes[code]["paths"].update(code_entry["path"].split(", "))
+                    merged_codes[code]["paths"].append(code_entry["path"])
 
     # If no codes were merged, return original codes
     if not merged_codes:
@@ -53,10 +53,10 @@ def decode_predictions(row: dict[str, typ.Any]) -> dict[str, typ.Any]:
                         "code": code_entry["code"],
                         "description": code_entry["description"],
                         "id": code_entry["id"],
-                        "paths": code_entry["path"].split(", "),
+                        "paths": [code_entry["path"]],
                     }
                 else:
-                    merged_codes[code]["paths"].update(code_entry["path"].split(", "))
+                    merged_codes[code_entry["code"]]["paths"].append(code_entry["path"])
 
     # Build output dictionary and merged list
     merged_codes_list = []

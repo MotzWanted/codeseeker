@@ -10,7 +10,9 @@ from .utils import get_first_row
 T = typ.TypeVar("T")
 
 
-def find_adapter(row: dict[str, typ.Any], verbose: bool = False) -> None | typ.Type[Adapter]:
+def find_adapter(
+    row: dict[str, typ.Any], verbose: bool = False
+) -> None | typ.Type[Adapter]:
     """Find an adapter for a row."""
     for v in KNOWN_ADAPTERS:
         if v.can_handle(row):
@@ -35,14 +37,11 @@ class CantHandleError(ValueError):
         super().__init__(message, **kwargs)
 
 
-D = typ.TypeVar("D", bound=typ.Union[datasets.Dataset, datasets.DatasetDict])
-
-
 def transform(
-    data: D,
+    data: datasets.Dataset | datasets.DatasetDict,
     options: DatasetOptions,
     verbose: bool = False,
-) -> D:
+) -> datasets.Dataset | datasets.DatasetDict:
     """Translate a HuggingFace daatset."""
     row = get_first_row(data)
 
