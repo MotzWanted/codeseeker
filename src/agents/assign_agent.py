@@ -6,7 +6,7 @@ import typing as typ
 from agents.base import HfBaseAgent
 from agents.errors import StructuredError
 
-ANSWER_PATTERN = r"<answer>.*?(\b[1-9]\d{0,3}(?:\s*,\s*[1-9]\d{0,3})*\b).*?<\/answer>"
+ANSWER_PATTERN = r"<answer>.*?(\b[0-9]\d{0,3}(?:\s*,\s*[1-9]\d{0,3})*\b).*?<\/answer>"
 
 
 class AssignAgent(HfBaseAgent):

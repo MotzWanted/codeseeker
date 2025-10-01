@@ -230,7 +230,7 @@ def pipe(
         lambda x: {
             **x,
             "output": [
-                x["codes"][subset_idx - 1]["name"]
+                x["codes"][subset_idx - 1]["code"]
                 for subset_idx in x["output"]
                 if len(x["codes"]) >= subset_idx > 0
             ],

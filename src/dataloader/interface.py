@@ -23,7 +23,9 @@ def _take_subset(
         return dset.select(subset_indices)
 
     # Recursively apply to DatasetDict
-    return datasets.DatasetDict({k: _take_subset(v, subset_size) for k, v in dset.items()})
+    return datasets.DatasetDict(
+        {k: _take_subset(v, subset_size) for k, v in dset.items()}
+    )
 
 
 def combine_datasets(
@@ -51,7 +53,12 @@ def _load_one_dataset(
 ) -> datasets.Dataset | datasets.DatasetDict:
     if isinstance(name_or_path, str):
         data = datasets.load_dataset(
-            name_or_path, name, subset, split=split, trust_remote_code=trust_remote_code, **kws
+            name_or_path,
+            name,
+            subset,
+            split=split,
+            trust_remote_code=trust_remote_code,
+            **kws,
         )
         if isinstance(data, (datasets.IterableDataset, datasets.IterableDatasetDict)):
             raise NotImplementedError(f"`{type(data)}` not supported.")
@@ -66,17 +73,25 @@ def _load_one_dataset(
         ) from e
 
 
-def _load_dataset_from_config(config: DatasetConfig, **kws: typing.Any) -> datasets.Dataset | datasets.DatasetDict:
+def _load_dataset_from_config(
+    config: DatasetConfig, **kws: typing.Any
+) -> datasets.Dataset | datasets.DatasetDict:
     """Load the dataset, process it according to the prompt template and return a HF dataset."""
     subsets = config.subsets or [None]
-    loaded_subsets = [_load_one_dataset(config.name_or_path, subset, split=config.split) for subset in subsets]
+    loaded_subsets = [
+        _load_one_dataset(config.name_or_path, subset, split=config.split, **kws)
+        for subset in subsets
+    ]
     if len(loaded_subsets) == 1:
         return loaded_subsets[0]
     return combine_datasets(loaded_subsets)
 
 
-def load_dataset(config: DatasetConfig) -> datasets.Dataset:
+def load_dataset(
+    config: DatasetConfig,
+    **kws: dict[str, typing.Any],
+) -> datasets.Dataset | datasets.DatasetDict:
     """Load a dataset."""
-    dset = _load_dataset_from_config(config)
+    dset = _load_dataset_from_config(config, **config.kwargs)
     dset = _take_subset(dset, config.options.subset_size)
     return adapt.transform(dset, options=config.options, verbose=False)

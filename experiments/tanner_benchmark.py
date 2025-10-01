@@ -28,26 +28,25 @@ class Arguments(pydantic.BaseModel):
     """Args for the script."""
 
     experiment_id: str = "agentic-system"
-    experiment_name: str = "v2"
+    experiment_name: str = "tanner"
 
     dataset: str = "mdace-icd10cm"  # "mimic-iii-50" | "mimic-iv" | "mdace-icd10cm"
     seed: int = 1
     n_samples: int = 1
 
     base_model: dict[str, typ.Any] = {
-        "provider": "azure",
-        "deployment": "o4-mini-1",
-        "api_base": "https://codeopenaisweden.openai.azure.com/",
-        "api_version": "2025-04-01-preview",
-        "endpoint": "chat/completions",
+        "provider": "vllm",
+        "deployment": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+        "api_base": "http://localhost:6538/v1",
+        "endpoint": "completions",
         "use_cache": True,
     }
     temperature: float = 0.6
-    max_tokens: int = 50_000
+    max_tokens: int = 10_000
 
     analyse_agent: dict[str, typ.Any] = {
         "agent_type": "base",
-        "prompt_name": "analyse_agent/base_v2",
+        "prompt_name": "analyse_agent/strict_v3",
     }
     locate_agent: dict[str, typ.Any] = {
         "agent_type": "split",
@@ -59,12 +58,12 @@ class Arguments(pydantic.BaseModel):
     }
     assign_agent: dict[str, typ.Any] = {
         "agent_type": "reasoning",
-        "prompt_name": "assign_agent/reasoning_v7",
+        "prompt_name": "assign_agent/reasoning_v6",
     }
 
     batch_size: int = 1
     num_workers: int = 4
-    all_codes: bool = False  # whether to use all codes in ICd
+    all_codes: bool = True  # whether to use all codes in ICd
 
     topk_assignable_terms: int = 10
     embed_config: list[dict[str, str]] = [
@@ -107,13 +106,9 @@ def run(args: Arguments):
     qdrant_service = qdrant_client.QdrantSearchService(
         **args.qdrant_config.model_dump()
     )
-    xml_trie = exp_utils.build_icd_trie(year=2022)
+    xml_trie = exp_utils.build_icd_trie(year=2024)
     mdace = load_dataset(DatasetConfig(**dataloader.DATASET_CONFIGS[args.dataset]))
     mdace = exp_utils.format_dataset(mdace, xml_trie, args.debug)
-    # mdace = mdace.select(range(15))
-    mdace = mdace.select(
-        (i for i in range(len(mdace)) if i not in [27, 179, 260, 327, 379, 394])
-    )
     if args.all_codes:
         eval_trie: dict[str, int] = OrderedDict(
             {code: idx for idx, code in enumerate(sorted(xml_trie.lookup), start=1)}
@@ -128,10 +123,8 @@ def run(args: Arguments):
         **args.analyse_agent,
         sampling_params={
             "temperature": args.temperature,
-            "max_completion_tokens": args.max_tokens,
+            "max_tokens": args.max_tokens,
             "seed": args.seed,
-            "model": args.base_model["deployment"],
-            "reasoning_effort": "low",
         },
     )
 
@@ -168,10 +161,8 @@ def run(args: Arguments):
         **args.locate_agent,
         sampling_params={
             "temperature": args.temperature,
-            "max_completion_tokens": args.max_tokens,
+            "max_tokens": args.max_tokens,
             "seed": args.seed,
-            "model": args.base_model["deployment"],
-            "reasoning_effort": "low",
         },
     )
 
@@ -201,10 +192,8 @@ def run(args: Arguments):
         **args.verify_agent,
         sampling_params={
             "temperature": args.temperature,
-            "max_completion_tokens": args.max_tokens,
+            "max_tokens": args.max_tokens,
             "seed": args.seed,
-            "model": args.base_model["deployment"],
-            "reasoning_effort": "low",
         },
     )
     task_maker = verify_agent(
@@ -232,10 +221,8 @@ def run(args: Arguments):
         **args.assign_agent,
         sampling_params={
             "temperature": args.temperature,
-            "max_completion_tokens": args.max_tokens,
             "seed": args.seed,
-            "model": args.base_model["deployment"],
-            "reasoning_effort": "low",
+            "max_tokens": args.max_tokens,
         },
     )
     task_maker = assign_agent(

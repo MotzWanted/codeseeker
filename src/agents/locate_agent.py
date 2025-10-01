@@ -43,9 +43,9 @@ class LocateSplitAgent(LocateAgent):
             raise ValueError(
                 f"Batch size must be 1, but got {batch_size}. Please use a batch size of 1."
             )
-        self._warm_up_prefix_cache(
-            {"note": batch["note"][0], "codes": [], "instructional_notes": []}
-        )
+        # self._warm_up_prefix_cache(
+        #     {"note": batch["note"][0], "codes": [], "instructional_notes": []}
+        # )
         # flatten the batch where instructional_notes and codes are nested
         # should increase the batch size to the length of the codes
         new_batch = defaultdict(list)
