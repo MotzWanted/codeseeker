@@ -55,10 +55,6 @@ dev = [
     "seaborn>=0.13.2",
 ]
 
-corti = [
-    "ml-datasets @ git+https://github.com/corticph/ml-datasets.git@tanner-health"
-]
-
 test = [
     "pre-commit>=3.4.0",
     "pytest>=7.4.3",
